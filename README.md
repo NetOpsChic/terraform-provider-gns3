@@ -27,7 +27,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.0.0"
+      version = "1.0.1"
     }
   }
 }
@@ -37,8 +37,12 @@ provider "gns3" {
   host = "http://localhost:3080"
 }
 ```
+## Files
 
-## Usage
+- `provider.tf`: Configures the GNS3 provider.
+- `variables.tf`: Defines input variables.
+- `main.tf`: Contains resource definitions.
+- `outputs.tf`: Specifies output values.
 
 ## Template for router
 ```hcl
@@ -47,7 +51,7 @@ data "gns3_template_id" "router_template" {
 }
 
 ```
-
+## Usage (For Quick Spin!)
 ### Creating a Project
 ```hcl
 resource "gns3_project" "project1" {

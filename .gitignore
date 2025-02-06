@@ -1,2 +1,5 @@
 ignore
-terraform/.terraform
+.terraform
+.terraform*
+terraform.*
+terraform-*
