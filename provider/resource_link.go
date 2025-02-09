@@ -9,89 +9,95 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
-// LinkNode represents a node in a GNS3 link
+// LinkNode represents a node in a GNS3 link.
 type LinkNode struct {
 	NodeID        string `json:"node_id"`
 	AdapterNumber int    `json:"adapter_number"`
 	PortNumber    int    `json:"port_number"`
 }
 
-// Link represents a GNS3 link between nodes
+// Link represents a GNS3 link between nodes.
 type Link struct {
 	LinkID string     `json:"link_id,omitempty"`
 	Nodes  []LinkNode `json:"nodes"`
 }
 
-// Define the GNS3 link resource schema
+// resourceGns3Link defines the GNS3 link resource schema.
 func resourceGns3Link() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3LinkCreate,
 		Read:   resourceGns3LinkRead,
 		Delete: resourceGns3LinkDelete,
-
 		Schema: map[string]*schema.Schema{
 			"project_id": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				ForceNew:    true,
+				Description: "The project ID in which the link is created.",
 			},
 			"node_a_id": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				ForceNew:    true,
+				Description: "ID of the first node. This can be a router, switch, or cloud node.",
 			},
 			"node_a_adapter": {
-				Type:     schema.TypeInt,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeInt,
+				Required:    true,
+				ForceNew:    true,
+				Description: "Adapter number for the first node.",
 			},
 			"node_a_port": {
-				Type:     schema.TypeInt,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeInt,
+				Required:    true,
+				ForceNew:    true,
+				Description: "Port number for the first node.",
 			},
 			"node_b_id": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				ForceNew:    true,
+				Description: "ID of the second node. This can be a router, switch, or cloud node.",
 			},
 			"node_b_adapter": {
-				Type:     schema.TypeInt,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeInt,
+				Required:    true,
+				ForceNew:    true,
+				Description: "Adapter number for the second node.",
 			},
 			"node_b_port": {
-				Type:     schema.TypeInt,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeInt,
+				Required:    true,
+				ForceNew:    true,
+				Description: "Port number for the second node.",
 			},
 			"link_id": {
-				Type:     schema.TypeString,
-				Computed: true,
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The unique ID of the link returned by the GNS3 API.",
 			},
 		},
 	}
 }
 
-// Create a new link between two nodes
+// resourceGns3LinkCreate creates a new link between two nodes.
 func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
-
-	// Access the Host from the config
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 
-	// Define the link structure with adapter and port numbers
+	// Build the link payload.
+	// The node IDs can come from any node type (router, switch, or cloud).
 	link := Link{
 		Nodes: []LinkNode{
 			{
-				AdapterNumber: d.Get("node_a_adapter").(int),
 				NodeID:        d.Get("node_a_id").(string),
+				AdapterNumber: d.Get("node_a_adapter").(int),
 				PortNumber:    d.Get("node_a_port").(int),
 			},
 			{
-				AdapterNumber: d.Get("node_b_adapter").(int),
 				NodeID:        d.Get("node_b_id").(string),
+				AdapterNumber: d.Get("node_b_adapter").(int),
 				PortNumber:    d.Get("node_b_port").(int),
 			},
 		},
@@ -127,20 +133,23 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-// Read function for GNS3 link (optional)
+// resourceGns3LinkRead reads the link resource (optional implementation).
 func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
-	// Implement if needed
+	// Implement if needed.
 	return nil
 }
 
-// Delete function for GNS3 link
+// resourceGns3LinkDelete deletes the link.
 func resourceGns3LinkDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 	linkID := d.Id()
 
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID), nil)
+	req, err := http.NewRequest("DELETE", fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID), nil)
+	if err != nil {
+		return fmt.Errorf("error creating delete request: %s", err)
+	}
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
