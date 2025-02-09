@@ -37,7 +37,6 @@ func resourceGns3Project() *schema.Resource {
 }
 
 func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
-	// Correct type assertion: meta is *ProviderConfig
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectName := d.Get("name").(string)
@@ -63,10 +62,14 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 		return err
 	}
 
-	// Ensure project_id is properly retrieved
+	// Attempt to retrieve the project ID using "project_id"
 	projectID, exists := createdProject["project_id"].(string)
-	if !exists {
-		return fmt.Errorf("failed to retrieve project_id from GNS3 API response")
+	if !exists || projectID == "" {
+		// If not found, try alternate key "projectId"
+		projectID, exists = createdProject["projectId"].(string)
+		if !exists || projectID == "" {
+			return fmt.Errorf("failed to retrieve project_id from GNS3 API response: %v", createdProject)
+		}
 	}
 
 	d.SetId(projectID)

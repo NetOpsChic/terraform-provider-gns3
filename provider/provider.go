@@ -6,8 +6,7 @@ import (
 
 // ProviderConfig holds the configuration for the provider
 type ProviderConfig struct {
-	Host      string
-	ProjectID string
+	Host string
 }
 
 // Provider function returns the schema.Provider for GNS3
@@ -25,6 +24,8 @@ func Provider() *schema.Provider {
 			"gns3_project": resourceGns3Project(),
 			"gns3_node":    resourceGns3Node(),
 			"gns3_link":    resourceGns3Link(),
+			"gns3_cloud":   resourceGns3Cloud(),
+			"gns3_switch":  resourceGns3Switch(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"gns3_template_id": dataSourceGns3TemplateID(),
