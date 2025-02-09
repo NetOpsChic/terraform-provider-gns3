@@ -4,20 +4,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
-// Switch represents the structure for a GNS3 Ethernet switch API request/response.
+// Switch represents the structure for a GNS3 switch node API request/response.
 type Switch struct {
 	Name      string `json:"name"`
-	NodeType  string `json:"node_type"`         // Specify the node type for a switch.
-	ComputeID string `json:"compute_id"`        // Required field for the API.
-	NodeID    string `json:"node_id,omitempty"` // The returned unique ID for the switch.
+	NodeType  string `json:"node_type"` // always "ethernet_switch"
+	ComputeID string `json:"compute_id,omitempty"`
+	NodeID    string `json:"node_id,omitempty"`
 }
 
-// resourceGns3Switch defines the Terraform resource schema for GNS3 switches.
+// defaultSwitchIcon holds the raw image data for the switch icon.
+// Replace "RAW_DATA_FOR_SWITCH_ICON" with your actual raw icon bytes.
+var defaultSwitchIcon = []byte("RAW_DATA_FOR_SWITCH_ICON")
+
+// resourceGns3Switch defines the Terraform resource schema for GNS3 switch nodes.
 func resourceGns3Switch() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3SwitchCreate,
@@ -52,12 +57,12 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
-	switchName := d.Get("name").(string)
+	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
 
-	// Build the payload including the node type and compute_id.
+	// Build the payload without sending a symbol_id field.
 	sw := Switch{
-		Name:      switchName,
+		Name:      name,
 		NodeType:  "ethernet_switch",
 		ComputeID: computeID,
 	}
@@ -67,7 +72,6 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to marshal switch data: %s", err)
 	}
 
-	// Use the unified endpoint to create nodes.
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
@@ -75,11 +79,10 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	// Expecting a 201 Created response.
 	if resp.StatusCode != http.StatusCreated {
-		var errorResponse map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&errorResponse)
-		return fmt.Errorf("failed to create switch, status code: %d, error: %v", resp.StatusCode, errorResponse)
+		var errResp map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&errResp)
+		return fmt.Errorf("failed to create switch, status code: %d, error: %v", resp.StatusCode, errResp)
 	}
 
 	var createdSwitch Switch
@@ -91,13 +94,33 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
+	// Use the fixed symbol_id ":/symbols/classic/ethernet_switch.svg" for the switch.
+	symbolID := ":/symbols/classic/ethernet_switch.svg"
+	symbolURL := fmt.Sprintf("%s/v2/symbols/%s/raw", host, symbolID)
+	req, err := http.NewRequest("POST", symbolURL, bytes.NewBuffer(defaultSwitchIcon))
+	if err != nil {
+		return fmt.Errorf("failed to create symbol update request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+	client := &http.Client{}
+	symResp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update switch symbol: %s", err)
+	}
+	defer symResp.Body.Close()
+	// Accept either 200 (OK) or 204 (No Content) as success.
+	if symResp.StatusCode != http.StatusOK && symResp.StatusCode != http.StatusNoContent {
+		bodyBytes, _ := ioutil.ReadAll(symResp.Body)
+		return fmt.Errorf("failed to update switch symbol, status code: %d, response: %s", symResp.StatusCode, string(bodyBytes))
+	}
+
 	d.SetId(createdSwitch.NodeID)
 	d.Set("switch_id", createdSwitch.NodeID)
 	return nil
 }
 
 func resourceGns3SwitchRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally implement a read function to reconcile state.
+	// Optionally implement reading to reconcile state.
 	return nil
 }
 
@@ -107,7 +130,6 @@ func resourceGns3SwitchDelete(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	// Use the unified deletion endpoint.
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {

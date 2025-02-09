@@ -55,8 +55,8 @@ resource "gns3_cloud" "cloud1" {
   name       = "Cloud1"
 }
 
-# Define four routers positioned in a square layout
-resource "gns3_node" "router1" {
+# Define four routers (renamed from node to router) positioned in a square layout
+resource "gns3_router" "router1" {
   project_id  = gns3_project.project1.project_id
   template_id = data.gns3_template_id.router_id.template_id
   name        = "Router1"
@@ -65,7 +65,7 @@ resource "gns3_node" "router1" {
   y           = 100
 }
 
-resource "gns3_node" "router2" {
+resource "gns3_router" "router2" {
   project_id  = gns3_project.project1.project_id
   template_id = data.gns3_template_id.router_id.template_id
   name        = "Router2"
@@ -74,7 +74,7 @@ resource "gns3_node" "router2" {
   y           = 100
 }
 
-resource "gns3_node" "router3" {
+resource "gns3_router" "router3" {
   project_id  = gns3_project.project1.project_id
   template_id = data.gns3_template_id.router_id.template_id
   name        = "Router3"
@@ -83,7 +83,7 @@ resource "gns3_node" "router3" {
   y           = 500
 }
 
-resource "gns3_node" "router4" {
+resource "gns3_router" "router4" {
   project_id  = gns3_project.project1.project_id
   template_id = data.gns3_template_id.router_id.template_id
   name        = "Router4"
@@ -103,7 +103,7 @@ resource "gns3_link" "link_cloud_switch" {
   node_a_id      = gns3_cloud.cloud1.id
   node_a_adapter = 0
   node_a_port    = var.cloud_port
-  # Switch: for this link, you can set adapter and port via variable.
+  # Switch: for this link, use the port specified by var.switch_cloud_port.
   node_b_id      = gns3_switch.switch1.id
   node_b_adapter = 0
   node_b_port    = var.switch_cloud_port
@@ -112,12 +112,11 @@ resource "gns3_link" "link_cloud_switch" {
 # Link: Switch connects to Router1  
 resource "gns3_link" "link_switch_router1" {
   project_id     = gns3_project.project1.project_id
-  # Use switch adapter 0, port 1 for this link.
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 1
-  # For Router1, assume its PA-8E (Ethernet) interface is on adapter 0, port 0.
-  node_b_id      = gns3_node.router1.id
+  node_a_port    = 1    # Switch port 1 for Router1
+  # For Router1, assume its Ethernet interface is on adapter 0, port 0.
+  node_b_id      = gns3_router.router1.id
   node_b_adapter = 0
   node_b_port    = 0
 }
@@ -127,9 +126,9 @@ resource "gns3_link" "link_switch_router2" {
   project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 2
+  node_a_port    = 2    # Switch port 2 for Router2
   # For Router2, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_node.router2.id
+  node_b_id      = gns3_router.router2.id
   node_b_adapter = 0
   node_b_port    = 0
 }
@@ -139,9 +138,9 @@ resource "gns3_link" "link_switch_router3" {
   project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 3
+  node_a_port    = 3    # Switch port 3 for Router3
   # For Router3, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_node.router3.id
+  node_b_id      = gns3_router.router3.id
   node_b_adapter = 0
   node_b_port    = 0
 }
@@ -151,9 +150,31 @@ resource "gns3_link" "link_switch_router4" {
   project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 4
+  node_a_port    = 4    # Switch port 4 for Router4
   # For Router4, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_node.router4.id
+  node_b_id      = gns3_router.router4.id
   node_b_adapter = 0
   node_b_port    = 0
+}
+
+#############################
+# Start All Nodes Resource
+#############################
+
+resource "gns3_start_all" "start_nodes" {
+  project_id = gns3_project.project1.project_id
+
+  depends_on = [
+    gns3_cloud.cloud1,
+    gns3_switch.switch1,
+    gns3_router.router1,
+    gns3_router.router2,
+    gns3_router.router3,
+    gns3_router.router4,
+    gns3_link.link_cloud_switch,
+    gns3_link.link_switch_router1,
+    gns3_link.link_switch_router2,
+    gns3_link.link_switch_router3,
+    gns3_link.link_switch_router4,
+  ]
 }
