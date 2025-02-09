@@ -7,7 +7,7 @@ variable "gns3_host" {
 variable "project_name" {
   description = "Name of the GNS3 project"
   type        = string
-  default     = "My-first-test1-topology"
+  default     = "nice"
 }
 
 variable "router_template_name" {
@@ -29,4 +29,16 @@ variable "routers" {
     { name = "Router3", x = 500, y = 500 },
     { name = "Router4", x = 100, y = 500 },
   ]
+}
+
+variable "cloud_port" {
+  description = "Port on the cloud node to use for linking."
+  type        = number
+  default     = 0
+}
+
+variable "switch_cloud_port" {
+  description = "Port on the switch to use when connecting to the cloud."
+  type        = number
+  default     = 0
 }

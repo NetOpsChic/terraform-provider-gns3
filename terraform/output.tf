@@ -4,6 +4,6 @@ output "project_id" {
 }
 
 output "router_ids" {
-  description = "The IDs of the created routers"
-  value       = { for r in gns3_node.routers : r.name => r.id }
+  description = "A map of router names to their IDs"
+  value       = { for r in gns3_router.routers : r.name => r.id }
 }
