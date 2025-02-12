@@ -1,6 +1,9 @@
 package provider
 
 import (
+	"fmt"
+	"log"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
@@ -16,8 +19,8 @@ func Provider() *schema.Provider {
 			"host": {
 				Type:        schema.TypeString,
 				Required:    true,
-				DefaultFunc: schema.EnvDefaultFunc("GNS3_HOST", nil),
-				Description: "The GNS3 server host URL.",
+				DefaultFunc: schema.EnvDefaultFunc("GNS3_HOST", "http://localhost:3080"),
+				Description: "The GNS3 server host URL. Default: http://localhost:3080",
 			},
 		},
 		ResourcesMap: map[string]*schema.Resource{
@@ -26,7 +29,8 @@ func Provider() *schema.Provider {
 			"gns3_switch":    resourceGns3Switch(),
 			"gns3_router":    resourceGns3Router(),
 			"gns3_link":      resourceGns3Link(),
-			"gns3_start_all": resourceGns3StartAll(), // New resource to start all nodes
+			"gns3_start_all": resourceGns3StartAll(),
+			"gns3_docker":    resourceGns3Docker(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"gns3_template_id": dataSourceGns3TemplateID(),
@@ -35,9 +39,14 @@ func Provider() *schema.Provider {
 	}
 }
 
+// providerConfigure initializes the provider with the GNS3 host configuration.
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	config := &ProviderConfig{
 		Host: d.Get("host").(string),
 	}
+
+	log.Printf("[INFO] Terraform GNS3 Provider configured with host: %s", config.Host)
+	fmt.Println("[INFO] Terraform GNS3 Provider successfully initialized!")
+
 	return config, nil
 }

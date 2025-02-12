@@ -13,13 +13,14 @@ func resourceGns3StartAll() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3StartAllCreate,
 		Read:   resourceGns3StartAllRead,
+		Update: resourceGns3StartAllUpdate,
 		Delete: resourceGns3StartAllDelete,
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 				Description: "The ID of the GNS3 project whose nodes should be started.",
+				// Removed ForceNew to allow updates (e.g. re-trigger start if project_id changes).
 			},
 		},
 	}
@@ -51,14 +52,18 @@ func resourceGns3StartAllCreate(d *schema.ResourceData, meta interface{}) error 
 }
 
 func resourceGns3StartAllRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally, you could implement a check to verify that nodes are started.
-	// For now, this is a no-op.
+	// This is an action resource; optionally implement a check to verify nodes are started.
 	return nil
 }
 
+func resourceGns3StartAllUpdate(d *schema.ResourceData, meta interface{}) error {
+	// For updates, we re-trigger the start action.
+	return resourceGns3StartAllCreate(d, meta)
+}
+
 func resourceGns3StartAllDelete(d *schema.ResourceData, meta interface{}) error {
-	// Optionally, implement a stop action here (e.g., POST to /nodes/stop)
-	// For now, we simply remove the resource.
+	// Optionally, implement a "stop" action if supported.
+	// For now, we'll simply remove the resource from state.
 	d.SetId("")
 	return nil
 }

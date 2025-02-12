@@ -14,48 +14,44 @@ func resourceGns3Router() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3RouterCreate,
 		Read:   resourceGns3RouterRead,
+		Update: resourceGns3RouterUpdate,
 		Delete: resourceGns3RouterDelete,
 
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:     schema.TypeString,
 				Required: true,
-				ForceNew: true,
 			},
 			"template_id": {
 				Type:     schema.TypeString,
 				Required: true,
-				ForceNew: true,
+				ForceNew: true, // Ensures deletion & recreation if template_id changes
 			},
 			"name": {
 				Type:     schema.TypeString,
 				Required: true,
-				ForceNew: true,
 			},
 			"compute_id": {
 				Type:     schema.TypeString,
 				Optional: true,
 				Default:  "local",
-				ForceNew: true,
 			},
 			"x": {
 				Type:     schema.TypeInt,
 				Optional: true,
 				Default:  0,
-				ForceNew: true,
 			},
 			"y": {
 				Type:     schema.TypeInt,
 				Optional: true,
 				Default:  0,
-				ForceNew: true,
 			},
 		},
 	}
 }
 
 func resourceGns3RouterCreate(d *schema.ResourceData, meta interface{}) error {
-	config := meta.(*ProviderConfig) // Correct type assertion
+	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 	templateID := d.Get("template_id").(string)
@@ -85,14 +81,10 @@ func resourceGns3RouterCreate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		var errorResponse map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&errorResponse); err != nil {
-			return fmt.Errorf("failed to create GNS3 router, status code: %d", resp.StatusCode)
-		}
-		return fmt.Errorf("failed to create GNS3 router, status code: %d, error: %v", resp.StatusCode, errorResponse)
+		return fmt.Errorf("failed to create GNS3 router, status code: %d", resp.StatusCode)
 	}
 
-	// Parse the response to retrieve the node_id (router id)
+	// Parse the response to retrieve the node_id (router ID)
 	var createdRouter map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&createdRouter); err != nil {
 		return fmt.Errorf("error decoding GNS3 API response: %s", err)
@@ -109,12 +101,54 @@ func resourceGns3RouterCreate(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceGns3RouterRead(d *schema.ResourceData, meta interface{}) error {
-	// Implement if needed to reconcile state.
+	// Optionally implement a call to refresh the router state from the API.
 	return nil
 }
 
+func resourceGns3RouterUpdate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	routerID := d.Id()
+
+	// Build the update payload with the updated attributes.
+	updateData := map[string]interface{}{
+		"name":       d.Get("name").(string),
+		"compute_id": d.Get("compute_id").(string),
+		"x":          d.Get("x").(int),
+		"y":          d.Get("y").(int),
+	}
+
+	data, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update data: %s", err)
+	}
+
+	// Send a PUT request to update the router.
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, routerID)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
+	if err != nil {
+		return fmt.Errorf("failed to create update request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update router: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to update router, status code: %d", resp.StatusCode)
+	}
+
+	// Optionally, re-read the resource to update state.
+	return resourceGns3RouterRead(d, meta)
+}
+
 func resourceGns3RouterDelete(d *schema.ResourceData, meta interface{}) error {
-	config := meta.(*ProviderConfig) // Correct type assertion
+	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 	routerID := d.Id()

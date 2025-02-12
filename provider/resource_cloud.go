@@ -10,16 +10,17 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
-// Cloud represents the structure for a GNS3 cloud node API request/response.
+// Cloud represents a GNS3 cloud node API request/response.
 type Cloud struct {
 	Name      string `json:"name"`
-	NodeType  string `json:"node_type"` // always "cloud"
+	NodeType  string `json:"node_type"`
 	ComputeID string `json:"compute_id,omitempty"`
 	NodeID    string `json:"node_id,omitempty"`
+	X         int    `json:"x,omitempty"` // ✅ Added X coordinate
+	Y         int    `json:"y,omitempty"` // ✅ Added Y coordinate
 }
 
-// defaultCloudIcon holds the raw image data for the cloud icon.
-// Replace the placeholder below with your actual raw icon bytes.
+// Default cloud symbol icon
 var defaultCloudIcon = []byte("RAW_DATA_FOR_CLOUD_ICON")
 
 // resourceGns3Cloud defines the Terraform resource schema for GNS3 cloud nodes.
@@ -27,27 +28,40 @@ func resourceGns3Cloud() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3CloudCreate,
 		Read:   resourceGns3CloudRead,
+		Update: resourceGns3CloudUpdate,
 		Delete: resourceGns3CloudDelete,
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				Description: "The project ID where the cloud node is deployed.",
 			},
 			"name": {
-				Type:     schema.TypeString,
-				Required: true,
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				Description: "Name of the cloud node.",
 			},
 			"compute_id": {
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "local",
-				ForceNew: true,
+				Type:        schema.TypeString,
+				Optional:    true,
+				Default:     "local",
+				Description: "Compute ID where the cloud node is running.",
+			},
+			"x": { // ✅ Added X coordinate support
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Description: "X position of the cloud node in GNS3 GUI.",
+			},
+			"y": { // ✅ Added Y coordinate support
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Description: "Y position of the cloud node in GNS3 GUI.",
 			},
 			"cloud_id": {
-				Type:     schema.TypeString,
-				Computed: true,
+				Type:        schema.TypeString,
+				Computed:    true,
+				Description: "The cloud node's ID assigned by GNS3.",
 			},
 		},
 	}
@@ -59,20 +73,22 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
+	x := d.Get("x").(int) // ✅ Retrieve X coordinate
+	y := d.Get("y").(int) // ✅ Retrieve Y coordinate
 
-	// Build the payload without sending symbol_id.
-	cl := Cloud{
+	cloud := Cloud{
 		Name:      name,
 		NodeType:  "cloud",
 		ComputeID: computeID,
+		X:         x, // ✅ Add X coordinate to request
+		Y:         y, // ✅ Add Y coordinate to request
 	}
 
-	data, err := json.Marshal(cl)
+	data, err := json.Marshal(cloud)
 	if err != nil {
 		return fmt.Errorf("failed to marshal cloud node data: %s", err)
 	}
 
-	// Create the cloud node.
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
 	resp, err := http.Post(url, "application/json", bytes.NewBuffer(data))
 	if err != nil {
@@ -95,26 +111,10 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Update the node's symbol using the symbols endpoint.
-	// Use the fixed symbol_id ":/symbols/classic/cloud.svg"
-	// (URL-encode the symbol if necessary)
-	symbolID := ":/symbols/classic/cloud.svg"
-	symbolURL := fmt.Sprintf("%s/v2/symbols/%s/raw", host, symbolID)
-	req, err := http.NewRequest("POST", symbolURL, bytes.NewBuffer(defaultCloudIcon))
+	// Update cloud node symbol
+	err = updateCloudSymbol(host, createdCloud.NodeID)
 	if err != nil {
-		return fmt.Errorf("failed to create symbol update request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-	client := &http.Client{}
-	symResp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update cloud symbol: %s", err)
-	}
-	defer symResp.Body.Close()
-	// Accept either 200 (OK) or 204 (No Content)
-	if symResp.StatusCode != http.StatusOK && symResp.StatusCode != http.StatusNoContent {
-		bodyBytes, _ := ioutil.ReadAll(symResp.Body)
-		return fmt.Errorf("failed to update cloud symbol, status code: %d, response: %s", symResp.StatusCode, string(bodyBytes))
+		return err
 	}
 
 	d.SetId(createdCloud.NodeID)
@@ -122,8 +122,64 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
+// Update function for modifying existing cloud nodes
+func resourceGns3CloudUpdate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	cloudID := d.Id()
+
+	updateData := map[string]interface{}{}
+
+	if d.HasChange("name") {
+		updateData["name"] = d.Get("name").(string)
+	}
+
+	if d.HasChange("compute_id") {
+		updateData["compute_id"] = d.Get("compute_id").(string)
+	}
+
+	if d.HasChange("x") {
+		updateData["x"] = d.Get("x").(int) // ✅ Update X coordinate
+	}
+
+	if d.HasChange("y") {
+		updateData["y"] = d.Get("y").(int) // ✅ Update Y coordinate
+	}
+
+	if len(updateData) == 0 {
+		return nil
+	}
+
+	updateBody, err := json.Marshal(updateData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update data: %s", err)
+	}
+
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, cloudID)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(updateBody))
+	if err != nil {
+		return fmt.Errorf("failed to create update request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error updating GNS3 cloud node: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update cloud node, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	return resourceGns3CloudRead(d, meta)
+}
+
 func resourceGns3CloudRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally implement reading to reconcile state.
+	// Optional: Implement if needed for state reconciliation
 	return nil
 }
 
@@ -150,5 +206,26 @@ func resourceGns3CloudDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId("")
+	return nil
+}
+
+// updateCloudSymbol updates the cloud node symbol to the default cloud icon.
+func updateCloudSymbol(host, nodeID string) error {
+	symbolID := ":/symbols/classic/cloud.svg"
+	symbolURL := fmt.Sprintf("%s/v2/symbols/%s/raw", host, symbolID)
+
+	req, err := http.NewRequest("POST", symbolURL, bytes.NewBuffer(defaultCloudIcon))
+	if err != nil {
+		return fmt.Errorf("failed to create symbol update request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update cloud symbol: %s", err)
+	}
+	defer resp.Body.Close()
+
 	return nil
 }

@@ -12,169 +12,147 @@ provider "gns3" {
 }
 
 #############################
-# Variables for Cloud & Switch Ports
+# Create GNS3 Project
 #############################
 
-# Cloud node always uses adapter 0; specify the port to use.
-variable "cloud_port" {
-  description = "Port on the cloud node to use for linking."
-  type        = number
-  default     = 0
-}
-
-# Switch port used for connection to the cloud.
-variable "switch_cloud_port" {
-  description = "Port on the switch to use when connecting to the cloud."
-  type        = number
-  default     = 0
-}
-
-#############################
-# Project and Device Resources
-#############################
-
-# Create a GNS3 project
 resource "gns3_project" "project1" {
-  name = "demo"
+  name = "simple-topology"
 }
 
-# Data source to retrieve template ID by name
-data "gns3_template_id" "router_id" {
-  name = "c7200"  # Replace with your router template's name if different.
+#############################
+# Retrieve Router Template
+#############################
+
+data "gns3_template_id" "router_template" {
+  name = "c7200"  # Replace with your router template name if different.
 }
 
-# Create a switch resource
+#############################
+# Create Network Devices
+#############################
+
+# Create a Switch to connect the devices
 resource "gns3_switch" "switch1" {
   project_id = gns3_project.project1.project_id
   name       = "Switch1"
+  x          = 300
+  y          = 300
 }
 
-# Create a cloud resource
+# Create a Cloud node (simulating Internet)
 resource "gns3_cloud" "cloud1" {
   project_id = gns3_project.project1.project_id
   name       = "Cloud1"
+  x          = 500
+  y          = 100
 }
 
-# Define four routers (renamed from node to router) positioned in a square layout
+# Create a DHCP Server as a Docker container (Ansible ZTP server)
+resource "gns3_docker" "dhcp_server" {
+  project_id = gns3_project.project1.project_id
+  name       = "DHCP_Server"
+  compute_id = "local"
+  image      = "gns3-dhcp-server"
+
+  environment = {
+    DHCP_RANGE   = "192.168.0.223,192.168.0.250,255.255.255.0"
+    GATEWAY      = "192.168.0.1"
+  }
+
+  x = 500
+  y = 300
+}
+
+# Create Router 1
 resource "gns3_router" "router1" {
   project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_id.template_id
+  template_id = data.gns3_template_id.router_template.template_id
   name        = "Router1"
   compute_id  = "local"
   x           = 100
   y           = 100
 }
 
+# Create Router 2
 resource "gns3_router" "router2" {
   project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_id.template_id
+  template_id = data.gns3_template_id.router_template.template_id
   name        = "Router2"
   compute_id  = "local"
-  x           = 500
-  y           = 100
-}
-
-resource "gns3_router" "router3" {
-  project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_id.template_id
-  name        = "Router3"
-  compute_id  = "local"
-  x           = 500
-  y           = 500
-}
-
-resource "gns3_router" "router4" {
-  project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_id.template_id
-  name        = "Router4"
-  compute_id  = "local"
   x           = 100
-  y           = 500
+  y           = 300
 }
 
 #############################
-# Revised Link Resources
+# Create Links
 #############################
 
-# Link: Cloud connects to Switch
-resource "gns3_link" "link_cloud_switch" {
+# Connect Router1 to Switch (Router1 port 0 to Switch port 0)
+resource "gns3_link" "link_router1_switch" {
   project_id     = gns3_project.project1.project_id
-  # Cloud: adapter is always 0; port is specified by var.cloud_port.
-  node_a_id      = gns3_cloud.cloud1.id
+  node_a_id      = gns3_router.router1.id
   node_a_adapter = 0
-  node_a_port    = var.cloud_port
-  # Switch: for this link, use the port specified by var.switch_cloud_port.
+  node_a_port    = 0
   node_b_id      = gns3_switch.switch1.id
   node_b_adapter = 0
-  node_b_port    = var.switch_cloud_port
+  node_b_port    = 0
 }
 
-# Link: Switch connects to Router1  
-resource "gns3_link" "link_switch_router1" {
+# Connect Router2 to Switch (Router2 port 0 to Switch port 1)
+resource "gns3_link" "link_router2_switch" {
+  project_id     = gns3_project.project1.project_id
+  node_a_id      = gns3_router.router2.id
+  node_a_adapter = 0
+  node_a_port    = 0
+  node_b_id      = gns3_switch.switch1.id
+  node_b_adapter = 0
+  node_b_port    = 1
+}
+
+# Connect Switch to Cloud (Switch port 2 to Cloud port 0)
+resource "gns3_link" "link_switch_cloud" {
   project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 1    # Switch port 1 for Router1
-  # For Router1, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_router.router1.id
+  node_a_port    = 2
+  node_b_id      = gns3_cloud.cloud1.id
   node_b_adapter = 0
   node_b_port    = 0
 }
 
-# Link: Switch connects to Router2  
-resource "gns3_link" "link_switch_router2" {
+# Connect DHCP Server to Switch (DHCP Server port 0 to Switch port 3)
+resource "gns3_link" "link_switch_dhcp" {
   project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_switch.switch1.id
   node_a_adapter = 0
-  node_a_port    = 2    # Switch port 2 for Router2
-  # For Router2, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_router.router2.id
+  node_a_port    = 3
+  node_b_id      = gns3_docker.dhcp_server.id
   node_b_adapter = 0
   node_b_port    = 0
-}
 
-# Link: Switch connects to Router3  
-resource "gns3_link" "link_switch_router3" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_switch.switch1.id
-  node_a_adapter = 0
-  node_a_port    = 3    # Switch port 3 for Router3
-  # For Router3, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_router.router3.id
-  node_b_adapter = 0
-  node_b_port    = 0
-}
+  lifecycle {
+    create_before_destroy = true
+  }
 
-# Link: Switch connects to Router4  
-resource "gns3_link" "link_switch_router4" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_switch.switch1.id
-  node_a_adapter = 0
-  node_a_port    = 4    # Switch port 4 for Router4
-  # For Router4, assume its Ethernet interface is on adapter 0, port 0.
-  node_b_id      = gns3_router.router4.id
-  node_b_adapter = 0
-  node_b_port    = 0
+  depends_on = [gns3_docker.dhcp_server, gns3_switch.switch1]
 }
 
 #############################
-# Start All Nodes Resource
+# Start All Devices (Ensures Everything Boots Up)
 #############################
 
 resource "gns3_start_all" "start_nodes" {
   project_id = gns3_project.project1.project_id
 
   depends_on = [
-    gns3_cloud.cloud1,
-    gns3_switch.switch1,
     gns3_router.router1,
     gns3_router.router2,
-    gns3_router.router3,
-    gns3_router.router4,
-    gns3_link.link_cloud_switch,
-    gns3_link.link_switch_router1,
-    gns3_link.link_switch_router2,
-    gns3_link.link_switch_router3,
-    gns3_link.link_switch_router4,
+    gns3_switch.switch1,
+    gns3_cloud.cloud1,
+    gns3_docker.dhcp_server,
+    gns3_link.link_router1_switch,
+    gns3_link.link_router2_switch,
+    gns3_link.link_switch_cloud,
+    gns3_link.link_switch_dhcp
   ]
 }

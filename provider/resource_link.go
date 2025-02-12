@@ -27,48 +27,42 @@ func resourceGns3Link() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3LinkCreate,
 		Read:   resourceGns3LinkRead,
+		Update: resourceGns3LinkUpdate,
 		Delete: resourceGns3LinkDelete,
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 				Description: "The project ID in which the link is created.",
 			},
 			"node_a_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 				Description: "ID of the first node. This can be a router, switch, or cloud node.",
 			},
 			"node_a_adapter": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				ForceNew:    true,
 				Description: "Adapter number for the first node.",
 			},
 			"node_a_port": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				ForceNew:    true,
 				Description: "Port number for the first node.",
 			},
 			"node_b_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 				Description: "ID of the second node. This can be a router, switch, or cloud node.",
 			},
 			"node_b_adapter": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				ForceNew:    true,
 				Description: "Adapter number for the second node.",
 			},
 			"node_b_port": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				ForceNew:    true,
 				Description: "Port number for the second node.",
 			},
 			"link_id": {
@@ -87,7 +81,6 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 
 	// Build the link payload.
-	// The node IDs can come from any node type (router, switch, or cloud).
 	link := Link{
 		Nodes: []LinkNode{
 			{
@@ -125,7 +118,7 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 
 	var createdLink Link
 	if err := json.NewDecoder(resp.Body).Decode(&createdLink); err != nil {
-		return fmt.Errorf("failed to decode response: %s", err)
+		return fmt.Errorf("failed to decode link response: %s", err)
 	}
 
 	d.SetId(createdLink.LinkID)
@@ -133,10 +126,62 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-// resourceGns3LinkRead reads the link resource (optional implementation).
+// resourceGns3LinkRead reads the link resource. This implementation is currently a no-op.
 func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
-	// Implement if needed.
+	// Optionally, implement a GET request to refresh state.
 	return nil
+}
+
+// resourceGns3LinkUpdate updates an existing link with new parameters.
+func resourceGns3LinkUpdate(d *schema.ResourceData, meta interface{}) error {
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	linkID := d.Id()
+
+	// Build the update payload with the updated attributes.
+	link := Link{
+		Nodes: []LinkNode{
+			{
+				NodeID:        d.Get("node_a_id").(string),
+				AdapterNumber: d.Get("node_a_adapter").(int),
+				PortNumber:    d.Get("node_a_port").(int),
+			},
+			{
+				NodeID:        d.Get("node_b_id").(string),
+				AdapterNumber: d.Get("node_b_adapter").(int),
+				PortNumber:    d.Get("node_b_port").(int),
+			},
+		},
+	}
+
+	linkData, err := json.Marshal(link)
+	if err != nil {
+		return fmt.Errorf("failed to marshal update link data: %s", err)
+	}
+
+	url := fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID)
+	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(linkData))
+	if err != nil {
+		return fmt.Errorf("failed to create update request: %s", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to update link: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		var errorResponse map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&errorResponse)
+		return fmt.Errorf("failed to update link, status code: %d, error: %v", resp.StatusCode, errorResponse)
+	}
+
+	// Optionally re-read the resource state.
+	return resourceGns3LinkRead(d, meta)
 }
 
 // resourceGns3LinkDelete deletes the link.
