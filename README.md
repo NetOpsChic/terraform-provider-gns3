@@ -14,11 +14,6 @@ The **Terraform Provider for GNS3** allows network engineers and DevOps professi
 - **GNS3 Server** (>= v2.2.0) installed and running
 - **GNS3 API** enabled on your server
 
-### Install the Provider
-```bash
-terraform init
-```
-
 ### Configure the Provider
 Add the following to your Terraform configuration:
 ```hcl
@@ -36,6 +31,12 @@ provider "gns3" {
   host = "http://localhost:3080"
 }
 ```
+
+### Install the Provider
+```bash
+terraform init
+```
+
 ## Files
 
 - `provider.tf`: Configures the GNS3 provider.
