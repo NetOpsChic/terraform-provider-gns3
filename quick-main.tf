@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.0.0"
+      version = "1.2.0"
     }
   }
 }
@@ -52,10 +52,10 @@ resource "gns3_docker" "dhcp_server" {
   project_id = gns3_project.project1.project_id
   name       = "DHCP_Server"
   compute_id = "local"
-  image      = "gns3-dhcp-server"
+  image      = "gns3-dhcp-server" #docker image available on docker hub
 
   environment = {
-    DHCP_RANGE   = "192.168.0.223,192.168.0.250,255.255.255.0"
+    DHCP_RANGE   = "192.168.0.X,192.168.0.X,255.255.255.0"
     GATEWAY      = "192.168.0.1"
   }
 

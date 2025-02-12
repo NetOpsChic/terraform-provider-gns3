@@ -10,7 +10,7 @@ The **Terraform Provider for GNS3** allows network engineers and DevOps professi
 
 ## Installation
 ### Prerequisites
-- **Terraform** (>= v1.0.0)
+- **Terraform** (>= v1.13.0)
 - **GNS3 Server** (>= v2.2.0) installed and running
 - **GNS3 API** enabled on your server
 
@@ -21,7 +21,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.1.0"
+      version = "1.2.0"
     }
   }
 }
@@ -69,6 +69,22 @@ resource "gns3_router" "router1" {
 }
 ```
 
+### Creating a Docker container
+```hcl
+resource "gns3_docker" "dhcp_server" {
+  project_id = gns3_project.project1.project_id
+  name       = ""
+  compute_id = "local"
+  image      = ""
+
+  environment = {
+   
+  }
+
+  x = 500
+  y = 300
+}
+```
 ### Creating a Switch
 ```hcl
 resource "gns3_switch" "switch1" {
