@@ -9,13 +9,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
-// resourceGns3Router defines the Terraform resource schema for GNS3 routers.
-func resourceGns3Router() *schema.Resource {
+// resourceGns3Template defines the Terraform resource schema for GNS3 templates.
+func resourceGns3Template() *schema.Resource {
 	return &schema.Resource{
-		Create: resourceGns3RouterCreate,
-		Read:   resourceGns3RouterRead,
-		Update: resourceGns3RouterUpdate,
-		Delete: resourceGns3RouterDelete,
+		Create: resourceGns3TemplateCreate,
+		Read:   resourceGns3TemplateRead,
+		Update: resourceGns3TemplateUpdate,
+		Delete: resourceGns3TemplateDelete,
 
 		Schema: map[string]*schema.Schema{
 			"project_id": {
@@ -50,66 +50,65 @@ func resourceGns3Router() *schema.Resource {
 	}
 }
 
-func resourceGns3RouterCreate(d *schema.ResourceData, meta interface{}) error {
+func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 	templateID := d.Get("template_id").(string)
-	routerName := d.Get("name").(string)
+	templateName := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
 	x := d.Get("x").(int)
 	y := d.Get("y").(int)
 
-	// Create router request payload
-	routerData := map[string]interface{}{
-		"name":       routerName,
+	// Create template request payload
+	templateData := map[string]interface{}{
+		"name":       templateName,
 		"compute_id": computeID,
 		"x":          x,
 		"y":          y,
 	}
 
-	nodeBody, err := json.Marshal(routerData)
+	nodeBody, err := json.Marshal(templateData)
 	if err != nil {
 		return fmt.Errorf("error marshaling JSON: %s", err)
 	}
 
-	// Send the request to create the router from the template
+	// Send the request to create the template
 	resp, err := http.Post(fmt.Sprintf("%s/v2/projects/%s/templates/%s", host, projectID, templateID), "application/json", bytes.NewBuffer(nodeBody))
 	if err != nil {
-		return fmt.Errorf("error creating GNS3 router: %s", err)
+		return fmt.Errorf("error creating GNS3 template: %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("failed to create GNS3 router, status code: %d", resp.StatusCode)
+		return fmt.Errorf("failed to create GNS3 template, status code: %d", resp.StatusCode)
 	}
 
-	// Parse the response to retrieve the node_id (router ID)
-	var createdRouter map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&createdRouter); err != nil {
+	// Parse the response to retrieve the node_id (template ID)
+	var createdTemplate map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&createdTemplate); err != nil {
 		return fmt.Errorf("error decoding GNS3 API response: %s", err)
 	}
-
-	routerID, exists := createdRouter["node_id"].(string)
-	if !exists || routerID == "" {
+	templateNodeID, exists := createdTemplate["node_id"].(string)
+	if !exists || templateNodeID == "" {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
 	// Set the resource ID in Terraform
-	d.SetId(routerID)
+	d.SetId(templateNodeID)
 	return nil
 }
 
-func resourceGns3RouterRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally implement a call to refresh the router state from the API.
+func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
+	// Optionally implement a call to refresh the template state from the API.
 	return nil
 }
 
-func resourceGns3RouterUpdate(d *schema.ResourceData, meta interface{}) error {
+func resourceGns3TemplateUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
-	routerID := d.Id()
+	templateID := d.Id()
 
 	// Build the update payload with the updated attributes.
 	updateData := map[string]interface{}{
@@ -124,8 +123,8 @@ func resourceGns3RouterUpdate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to marshal update data: %s", err)
 	}
 
-	// Send a PUT request to update the router.
-	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, routerID)
+	// Send a PUT request to update the template.
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, templateID)
 	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create update request: %s", err)
@@ -135,34 +134,34 @@ func resourceGns3RouterUpdate(d *schema.ResourceData, meta interface{}) error {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to update router: %s", err)
+		return fmt.Errorf("failed to update template: %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to update router, status code: %d", resp.StatusCode)
+		return fmt.Errorf("failed to update template, status code: %d", resp.StatusCode)
 	}
 
 	// Optionally, re-read the resource to update state.
-	return resourceGns3RouterRead(d, meta)
+	return resourceGns3TemplateRead(d, meta)
 }
 
-func resourceGns3RouterDelete(d *schema.ResourceData, meta interface{}) error {
+func resourceGns3TemplateDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
-	routerID := d.Id()
+	templateID := d.Id()
 
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, routerID), nil)
+	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, templateID), nil)
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error deleting GNS3 router: %s", err)
+		return fmt.Errorf("error deleting GNS3 template: %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("failed to delete GNS3 router, status code: %d", resp.StatusCode)
+		return fmt.Errorf("failed to delete GNS3 template, status code: %d", resp.StatusCode)
 	}
 
 	d.SetId("")

@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.2.0"
+      version = "1.0.0"
     }
   }
 }
@@ -20,11 +20,11 @@ resource "gns3_project" "project1" {
 }
 
 #############################
-# Retrieve Router Template
+# Retrieve Template
 #############################
 
-data "gns3_template_id" "router_template" {
-  name = "c7200"  # Replace with your router template name if different.
+data "gns3_template_id" "template" {
+  name = "c7200"  # Replace with your template name if different.
 }
 
 #############################
@@ -47,36 +47,20 @@ resource "gns3_cloud" "cloud1" {
   y          = 100
 }
 
-# Create a DHCP Server as a Docker container (Ansible ZTP server)
-resource "gns3_docker" "dhcp_server" {
-  project_id = gns3_project.project1.project_id
-  name       = "DHCP_Server"
-  compute_id = "local"
-  image      = "gns3-dhcp-server" #docker image available on docker hub
-
-  environment = {
-    DHCP_RANGE   = "192.168.0.X,192.168.0.X,255.255.255.0"
-    GATEWAY      = "192.168.0.1"
-  }
-
-  x = 500
-  y = 300
-}
-
-# Create Router 1
-resource "gns3_router" "router1" {
+# Create Template 1 (Router1)
+resource "gns3_template" "template1" {
   project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_template.template_id
+  template_id = data.gns3_template_id.template.template_id
   name        = "Router1"
   compute_id  = "local"
   x           = 100
   y           = 100
 }
 
-# Create Router 2
-resource "gns3_router" "router2" {
+# Create Template 2 (Router2)
+resource "gns3_template" "template2" {
   project_id  = gns3_project.project1.project_id
-  template_id = data.gns3_template_id.router_template.template_id
+  template_id = data.gns3_template_id.template.template_id
   name        = "Router2"
   compute_id  = "local"
   x           = 100
@@ -87,10 +71,10 @@ resource "gns3_router" "router2" {
 # Create Links
 #############################
 
-# Connect Router1 to Switch (Router1 port 0 to Switch port 0)
-resource "gns3_link" "link_router1_switch" {
+# Connect Template1 to Switch (Router1 port 0 to Switch port 0)
+resource "gns3_link" "link_template1_switch" {
   project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_router.router1.id
+  node_a_id      = gns3_template.template1.id
   node_a_adapter = 0
   node_a_port    = 0
   node_b_id      = gns3_switch.switch1.id
@@ -98,10 +82,10 @@ resource "gns3_link" "link_router1_switch" {
   node_b_port    = 0
 }
 
-# Connect Router2 to Switch (Router2 port 0 to Switch port 1)
-resource "gns3_link" "link_router2_switch" {
+# Connect Template2 to Switch (Router2 port 0 to Switch port 1)
+resource "gns3_link" "link_template2_switch" {
   project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_router.router2.id
+  node_a_id      = gns3_template.template2.id
   node_a_adapter = 0
   node_a_port    = 0
   node_b_id      = gns3_switch.switch1.id
@@ -120,23 +104,6 @@ resource "gns3_link" "link_switch_cloud" {
   node_b_port    = 0
 }
 
-# Connect DHCP Server to Switch (DHCP Server port 0 to Switch port 3)
-resource "gns3_link" "link_switch_dhcp" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_switch.switch1.id
-  node_a_adapter = 0
-  node_a_port    = 3
-  node_b_id      = gns3_docker.dhcp_server.id
-  node_b_adapter = 0
-  node_b_port    = 0
-
-  lifecycle {
-    create_before_destroy = true
-  }
-
-  depends_on = [gns3_docker.dhcp_server, gns3_switch.switch1]
-}
-
 #############################
 # Start All Devices (Ensures Everything Boots Up)
 #############################
@@ -145,14 +112,12 @@ resource "gns3_start_all" "start_nodes" {
   project_id = gns3_project.project1.project_id
 
   depends_on = [
-    gns3_router.router1,
-    gns3_router.router2,
+    gns3_template.template1,
+    gns3_template.template2,
     gns3_switch.switch1,
     gns3_cloud.cloud1,
-    gns3_docker.dhcp_server,
-    gns3_link.link_router1_switch,
-    gns3_link.link_router2_switch,
-    gns3_link.link_switch_cloud,
-    gns3_link.link_switch_dhcp
+    gns3_link.link_template1_switch,
+    gns3_link.link_template2_switch,
+    gns3_link.link_switch_cloud
   ]
 }

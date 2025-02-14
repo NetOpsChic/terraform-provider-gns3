@@ -27,7 +27,7 @@ func Provider() *schema.Provider {
 			"gns3_project":   resourceGns3Project(),
 			"gns3_cloud":     resourceGns3Cloud(),
 			"gns3_switch":    resourceGns3Switch(),
-			"gns3_router":    resourceGns3Router(),
+			"gns3_template":  resourceGns3Template(),
 			"gns3_link":      resourceGns3Link(),
 			"gns3_start_all": resourceGns3StartAll(),
 			"gns3_docker":    resourceGns3Docker(),
