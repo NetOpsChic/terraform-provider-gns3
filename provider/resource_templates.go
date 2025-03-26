@@ -36,6 +36,11 @@ func resourceGns3Template() *schema.Resource {
 				Optional: true,
 				Default:  "local",
 			},
+			"start": {
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
 			"x": {
 				Type:     schema.TypeInt,
 				Optional: true,
@@ -96,6 +101,20 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 
 	// Set the resource ID in Terraform
 	d.SetId(templateNodeID)
+
+	// Check if the "start" attribute is true and start the node if so.
+	if d.Get("start").(bool) {
+		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", host, projectID, templateNodeID)
+		startResp, err := http.Post(startURL, "application/json", nil)
+		if err != nil {
+			return fmt.Errorf("error starting node: %s", err)
+		}
+		defer startResp.Body.Close()
+		if startResp.StatusCode != http.StatusOK {
+			return fmt.Errorf("failed to start node, status code: %d", startResp.StatusCode)
+		}
+	}
+
 	return nil
 }
 

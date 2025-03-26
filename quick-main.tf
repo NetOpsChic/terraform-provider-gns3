@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.0.0"
+      version = "2.0.1"
     }
   }
 }
@@ -53,6 +53,7 @@ resource "gns3_template" "template1" {
   template_id = data.gns3_template_id.template.template_id
   name        = "Router1"
   compute_id  = "local"
+  start       = true
   x           = 100
   y           = 100
 }
@@ -63,6 +64,7 @@ resource "gns3_template" "template2" {
   template_id = data.gns3_template_id.template.template_id
   name        = "Router2"
   compute_id  = "local"
+  start       = true
   x           = 100
   y           = 300
 }
