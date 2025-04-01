@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -20,6 +22,32 @@ type LinkNode struct {
 type Link struct {
 	LinkID string     `json:"link_id,omitempty"`
 	Nodes  []LinkNode `json:"nodes"`
+}
+
+func waitForNode(host, projectID, nodeID string) error {
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
+	for i := 0; i < 10; i++ {
+		resp, err := http.Get(url)
+		if err != nil {
+			return fmt.Errorf("failed to query nodes: %s", err)
+		}
+		body, err := ioutil.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return fmt.Errorf("failed to read nodes response: %s", err)
+		}
+		var nodes []map[string]interface{}
+		if err := json.Unmarshal(body, &nodes); err != nil {
+			return fmt.Errorf("failed to parse nodes JSON: %s", err)
+		}
+		for _, node := range nodes {
+			if id, ok := node["node_id"].(string); ok && id == nodeID {
+				return nil // Node found
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+	return fmt.Errorf("node %s not found in controller after polling", nodeID)
 }
 
 // resourceGns3Link defines the GNS3 link resource schema.
@@ -80,16 +108,28 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 
+	// Retrieve node IDs from resource data
+	nodeAID := d.Get("node_a_id").(string)
+	nodeBID := d.Get("node_b_id").(string)
+
+	// Poll the controller until both nodes are registered
+	if err := waitForNode(host, projectID, nodeAID); err != nil {
+		return fmt.Errorf("node A not found: %s", err)
+	}
+	if err := waitForNode(host, projectID, nodeBID); err != nil {
+		return fmt.Errorf("node B not found: %s", err)
+	}
+
 	// Build the link payload.
 	link := Link{
 		Nodes: []LinkNode{
 			{
-				NodeID:        d.Get("node_a_id").(string),
+				NodeID:        nodeAID,
 				AdapterNumber: d.Get("node_a_adapter").(int),
 				PortNumber:    d.Get("node_a_port").(int),
 			},
 			{
-				NodeID:        d.Get("node_b_id").(string),
+				NodeID:        nodeBID,
 				AdapterNumber: d.Get("node_b_adapter").(int),
 				PortNumber:    d.Get("node_b_port").(int),
 			},

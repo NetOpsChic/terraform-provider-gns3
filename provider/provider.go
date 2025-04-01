@@ -9,7 +9,8 @@ import (
 
 // ProviderConfig holds configuration for the provider.
 type ProviderConfig struct {
-	Host string
+	Host   string
+	APIURL string
 }
 
 // Provider returns the Terraform provider for GNS3.
@@ -31,6 +32,7 @@ func Provider() *schema.Provider {
 			"gns3_link":      resourceGns3Link(),
 			"gns3_start_all": resourceGns3StartAll(),
 			"gns3_docker":    resourceGns3Docker(),
+			"gns3_qemu_node": resourceGns3Qemu(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"gns3_template_id": dataSourceGns3TemplateID(),
@@ -42,7 +44,8 @@ func Provider() *schema.Provider {
 // providerConfigure initializes the provider with the GNS3 host configuration.
 func providerConfigure(d *schema.ResourceData) (interface{}, error) {
 	config := &ProviderConfig{
-		Host: d.Get("host").(string),
+		Host:   d.Get("host").(string),
+		APIURL: d.Get("host").(string),
 	}
 
 	log.Printf("[INFO] Terraform GNS3 Provider configured with host: %s", config.Host)

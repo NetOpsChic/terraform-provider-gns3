@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -27,7 +28,6 @@ func resourceGns3Project() *schema.Resource {
 				Type:        schema.TypeString,
 				Required:    true,
 				Description: "The name of the GNS3 project.",
-				// ForceNew removed so that the project name can be updated.
 			},
 			"project_id": {
 				Type:        schema.TypeString,
@@ -38,62 +38,71 @@ func resourceGns3Project() *schema.Resource {
 	}
 }
 
-// resourceGns3ProjectCreate creates a new GNS3 project.
 func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectName := d.Get("name").(string)
 
-	// Prepare project request payload.
-	project := Project{
-		Name: projectName,
+	// Step 1: Create on controller
+	project := Project{Name: projectName}
+	projectData, _ := json.Marshal(project)
+	controllerResp, _ := http.Post(fmt.Sprintf("%s/v2/projects", host), "application/json", bytes.NewBuffer(projectData))
+	defer controllerResp.Body.Close()
+
+	if controllerResp.StatusCode != http.StatusCreated {
+		body, _ := ioutil.ReadAll(controllerResp.Body)
+		return fmt.Errorf("Controller project create failed: %s", body)
 	}
 
-	projectData, err := json.Marshal(project)
-	if err != nil {
-		return fmt.Errorf("failed to marshal project data: %s", err)
-	}
-
-	url := fmt.Sprintf("%s/v2/projects", host)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(projectData))
-	if err != nil {
-		return fmt.Errorf("failed to create project: %s", err)
-	}
-	defer resp.Body.Close()
-
-	var createdProject map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&createdProject); err != nil {
-		return err
-	}
-
-	// Retrieve the project ID using either "project_id" or "projectId".
-	projectID, exists := createdProject["project_id"].(string)
-	if !exists || projectID == "" {
-		projectID, exists = createdProject["projectId"].(string)
-		if !exists || projectID == "" {
-			return fmt.Errorf("failed to retrieve project_id from GNS3 API response: %v", createdProject)
-		}
-	}
-
+	var projectResp map[string]interface{}
+	json.NewDecoder(controllerResp.Body).Decode(&projectResp)
+	projectID := projectResp["project_id"].(string)
 	d.SetId(projectID)
 	d.Set("project_id", projectID)
+
+	// Step 2: Create on compute
+	computePayload := Project{Name: projectName, ProjectID: projectID}
+	computeData, _ := json.Marshal(computePayload)
+	computeResp, _ := http.Post(fmt.Sprintf("%s/v2/compute/projects", host), "application/json", bytes.NewBuffer(computeData))
+	defer computeResp.Body.Close()
+
+	if computeResp.StatusCode != http.StatusCreated && computeResp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(computeResp.Body)
+		return fmt.Errorf("Compute project create failed: %s", body)
+	}
+
+	// Step 3: Open the project (optional but useful)
+	// Sync with controller by re-opening the project
+	openURL := fmt.Sprintf("%s/v2/projects/%s/open", config.Host, projectID)
+	openReq, err := http.NewRequest("POST", openURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to prepare open project request to controller: %s", err)
+	}
+
+	openResp, err := http.DefaultClient.Do(openReq)
+	if err != nil {
+		return fmt.Errorf("failed to open/sync project with controller: %s", err)
+	}
+	defer openResp.Body.Close()
+
+	if openResp.StatusCode != http.StatusOK && openResp.StatusCode != http.StatusCreated {
+		body, _ := ioutil.ReadAll(openResp.Body)
+		return fmt.Errorf("failed to open/sync project on controller, status: %d, response: %s", openResp.StatusCode, string(body))
+	}
+
 	return nil
 }
 
-// resourceGns3ProjectRead reads the project state from GNS3.
-// (This implementation can be enhanced to refresh state if needed.)
 // resourceGns3ProjectRead reads the project state from GNS3.
 func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Id()
 
-	// If there is no ID, assume the project doesn't exist
 	if projectID == "" {
 		return nil
 	}
 
-	// Fetch project details from GNS3
 	url := fmt.Sprintf("%s/v2/projects/%s", host, projectID)
 	resp, err := http.Get(url)
 	if err != nil {
@@ -101,7 +110,6 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	// If project does not exist, remove it from Terraform state
 	if resp.StatusCode == http.StatusNotFound {
 		d.SetId("")
 		return nil
@@ -111,13 +119,11 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve project, status code: %d", resp.StatusCode)
 	}
 
-	// Decode response
 	var project map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&project); err != nil {
 		return fmt.Errorf("failed to decode project response: %s", err)
 	}
 
-	// Ensure project still exists and update state
 	if project["project_id"] == nil {
 		d.SetId("")
 		return nil
@@ -129,13 +135,12 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-// resourceGns3ProjectUpdate updates the project's name in place.
+// resourceGns3ProjectUpdate updates the project's name.
 func resourceGns3ProjectUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Id()
 
-	// Check if the "name" attribute has changed.
 	if d.HasChange("name") {
 		newName := d.Get("name").(string)
 		updateData := map[string]interface{}{
