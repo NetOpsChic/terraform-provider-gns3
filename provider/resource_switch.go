@@ -30,7 +30,9 @@ func resourceGns3Switch() *schema.Resource {
 		Read:   resourceGns3SwitchRead,
 		Update: resourceGns3SwitchUpdate,
 		Delete: resourceGns3SwitchDelete,
-
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,

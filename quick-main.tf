@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.3.0"
+      version = "2.4.0"
     }
   }
 }
@@ -12,7 +12,7 @@ provider "gns3" {
 }
 
 resource "gns3_project" "project1" {
-  name = "test-link"
+  name = "test-import"
 }
 
 # ZTP Template (Docker Container)
@@ -172,3 +172,22 @@ output "link_ids" {
     Cloud_to_switch = gns3_link.Cloud_to_switch.id,
   }
 }
+# Output the project ID
+output "project_details" {
+  description = "Project details"
+  value = {
+    project_id   = gns3_project.project1.id
+    project_name = gns3_project.project1.name
+  }
+}
+
+# Output QEMU node IDs by name
+output "network_device_ids" {
+  description = "Mapping of router names to their node IDs"
+  value = {
+    R1 = gns3_qemu_node.R1.id
+    R2 = gns3_qemu_node.R2.id
+    R3 = gns3_qemu_node.R3.id
+  }
+}
+

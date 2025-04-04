@@ -17,7 +17,9 @@ func resourceGns3Qemu() *schema.Resource {
 		Read:   resourceGns3QemuRead,
 		Update: resourceGns3QemuUpdate,
 		Delete: resourceGns3QemuDelete,
-
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,

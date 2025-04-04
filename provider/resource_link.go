@@ -57,6 +57,9 @@ func resourceGns3Link() *schema.Resource {
 		Read:   resourceGns3LinkRead,
 		Update: resourceGns3LinkUpdate,
 		Delete: resourceGns3LinkDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,

@@ -36,7 +36,9 @@ func resourceGns3Docker() *schema.Resource {
 		Read:   resourceGns3DockerRead,
 		Update: resourceGns3DockerUpdate,
 		Delete: resourceGns3DockerDelete,
-
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,

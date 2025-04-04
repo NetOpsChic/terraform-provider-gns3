@@ -16,7 +16,9 @@ func resourceGns3Template() *schema.Resource {
 		Read:   resourceGns3TemplateRead,
 		Update: resourceGns3TemplateUpdate,
 		Delete: resourceGns3TemplateDelete,
-
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:     schema.TypeString,
