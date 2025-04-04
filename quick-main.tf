@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.0.1"
+      version = "2.3.0"
     }
   }
 }
@@ -12,7 +12,7 @@ provider "gns3" {
 }
 
 resource "gns3_project" "project1" {
-  name = "netdevop-ztp1"
+  name = "test-link"
 }
 
 # ZTP Template (Docker Container)
@@ -158,15 +158,17 @@ resource "gns3_link" "Cloud_to_switch" {
   node_b_adapter = 0
   node_b_port    = 2
 }
-# Start all
-resource "gns3_start_all" "start_nodes" {
-  project_id = gns3_project.project1.id
-  depends_on = [
-    gns3_qemu_node.R1,
-    gns3_qemu_node.R2,
-    gns3_qemu_node.R3,
-    gns3_template.ztp,
-    gns3_switch.mgmt_switch,
-    gns3_cloud.cloud
-  ]
+
+# Output the link IDs as a mapping.
+output "link_ids" {
+  description = "Mapping of link names to their IDs"
+  value = {
+    R1_to_R2        = gns3_link.R1_to_R2.id,
+    R2_to_R3        = gns3_link.R2_to_R3.id,
+    R1_to_switch    = gns3_link.R1_to_switch.id,
+    R2_to_switch    = gns3_link.R2_to_switch.id,
+    R3_to_switch    = gns3_link.R3_to_switch.id,
+    ZTP_to_switch   = gns3_link.ZTP_to_switch.id,
+    Cloud_to_switch = gns3_link.Cloud_to_switch.id,
+  }
 }

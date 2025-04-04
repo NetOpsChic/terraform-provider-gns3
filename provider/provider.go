@@ -37,6 +37,7 @@ func Provider() *schema.Provider {
 		DataSourcesMap: map[string]*schema.Resource{
 			"gns3_template_id": dataSourceGns3TemplateID(),
 			"gns3_node_id":     dataSourceGns3NodeID(),
+			"gns3_link_id":     dataSourceGns3LinkID(),
 		},
 		ConfigureFunc: providerConfigure,
 	}
