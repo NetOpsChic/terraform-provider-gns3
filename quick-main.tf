@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.4.0"
+      version = "2.5.0"
     }
   }
 }
@@ -12,36 +12,34 @@ provider "gns3" {
 }
 
 resource "gns3_project" "project1" {
-  name = "test-import"
+  name = "test-new-feature"
 }
 
-# ZTP Template (Docker Container)
-data "gns3_template_id" "ztp" {
-  name = "ztp-server"
+# ✅ ZTP Docker Node
+resource "gns3_docker" "ztp" {
+  project_id = gns3_project.project1.project_id
+  name       = "ztp-server"
+  compute_id = "local"
+  image      = "ztp-container:latest" # Make sure this image is pulled on the GNS3 host
+  start_command = "/bin/bash /usr/local/bin/startup.sh"
+  start         = true  # Or false to delay startup
 }
 
-resource "gns3_template" "ztp" {
-  name        = "ztp-server"
-  project_id  = gns3_project.project1.id
-  template_id = data.gns3_template_id.ztp.template_id
-  start       = true
-}
-
-# Cloud Node
+# ☁️ Cloud
 resource "gns3_cloud" "cloud" {
   name       = "cloud"
-  project_id = gns3_project.project1.id
+  project_id = gns3_project.project1.project_id
 }
 
-# Management Switch
+# 🛜 Management Switch
 resource "gns3_switch" "mgmt_switch" {
   name       = "mgmt-switch"
-  project_id = gns3_project.project1.id
+  project_id = gns3_project.project1.project_id
 }
 
-# QEMU Routers
+# 🛠️ Routers (QEMU Nodes)
 resource "gns3_qemu_node" "R1" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   name           = "R1"
   adapter_type   = "e1000"
   adapters       = 3
@@ -56,7 +54,7 @@ resource "gns3_qemu_node" "R1" {
 }
 
 resource "gns3_qemu_node" "R2" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   name           = "R2"
   adapter_type   = "e1000"
   adapters       = 3
@@ -71,7 +69,7 @@ resource "gns3_qemu_node" "R2" {
 }
 
 resource "gns3_qemu_node" "R3" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   name           = "R3"
   adapter_type   = "e1000"
   adapters       = 3
@@ -85,9 +83,9 @@ resource "gns3_qemu_node" "R3" {
   start_vm       = true
 }
 
-# Router-to-Router Links
+# 🔗 Links
 resource "gns3_link" "R1_to_R2" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_qemu_node.R1.id
   node_a_adapter = 1
   node_a_port    = 0
@@ -97,7 +95,7 @@ resource "gns3_link" "R1_to_R2" {
 }
 
 resource "gns3_link" "R2_to_R3" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_qemu_node.R2.id
   node_a_adapter = 2
   node_a_port    = 0
@@ -106,9 +104,8 @@ resource "gns3_link" "R2_to_R3" {
   node_b_port    = 0
 }
 
-# Management Links (Routers to mgmt-switch)
 resource "gns3_link" "R1_to_switch" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_qemu_node.R1.id
   node_a_adapter = 0
   node_a_port    = 0
@@ -118,7 +115,7 @@ resource "gns3_link" "R1_to_switch" {
 }
 
 resource "gns3_link" "R2_to_switch" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_qemu_node.R2.id
   node_a_adapter = 0
   node_a_port    = 0
@@ -128,7 +125,7 @@ resource "gns3_link" "R2_to_switch" {
 }
 
 resource "gns3_link" "R3_to_switch" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_qemu_node.R3.id
   node_a_adapter = 0
   node_a_port    = 0
@@ -137,10 +134,9 @@ resource "gns3_link" "R3_to_switch" {
   node_b_port    = 5
 }
 
-# ZTP to mgmt-switch
 resource "gns3_link" "ZTP_to_switch" {
-  project_id     = gns3_project.project1.id
-  node_a_id      = gns3_template.ztp.id
+  project_id     = gns3_project.project1.project_id
+  node_a_id      = gns3_docker.ztp.id
   node_a_adapter = 0
   node_a_port    = 0
   node_b_id      = gns3_switch.mgmt_switch.id
@@ -148,9 +144,8 @@ resource "gns3_link" "ZTP_to_switch" {
   node_b_port    = 1
 }
 
-# Cloud to mgmt-switch
 resource "gns3_link" "Cloud_to_switch" {
-  project_id     = gns3_project.project1.id
+  project_id     = gns3_project.project1.project_id
   node_a_id      = gns3_cloud.cloud.id
   node_a_adapter = 0
   node_a_port    = 0
@@ -158,36 +153,3 @@ resource "gns3_link" "Cloud_to_switch" {
   node_b_adapter = 0
   node_b_port    = 2
 }
-
-# Output the link IDs as a mapping.
-output "link_ids" {
-  description = "Mapping of link names to their IDs"
-  value = {
-    R1_to_R2        = gns3_link.R1_to_R2.id,
-    R2_to_R3        = gns3_link.R2_to_R3.id,
-    R1_to_switch    = gns3_link.R1_to_switch.id,
-    R2_to_switch    = gns3_link.R2_to_switch.id,
-    R3_to_switch    = gns3_link.R3_to_switch.id,
-    ZTP_to_switch   = gns3_link.ZTP_to_switch.id,
-    Cloud_to_switch = gns3_link.Cloud_to_switch.id,
-  }
-}
-# Output the project ID
-output "project_details" {
-  description = "Project details"
-  value = {
-    project_id   = gns3_project.project1.id
-    project_name = gns3_project.project1.name
-  }
-}
-
-# Output QEMU node IDs by name
-output "network_device_ids" {
-  description = "Mapping of router names to their node IDs"
-  value = {
-    R1 = gns3_qemu_node.R1.id
-    R2 = gns3_qemu_node.R2.id
-    R3 = gns3_qemu_node.R3.id
-  }
-}
-

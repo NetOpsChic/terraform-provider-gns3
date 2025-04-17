@@ -48,49 +48,69 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 
 	// Step 1: Create on controller
 	project := Project{Name: projectName}
-	projectData, _ := json.Marshal(project)
-	controllerResp, _ := http.Post(fmt.Sprintf("%s/v2/projects", host), "application/json", bytes.NewBuffer(projectData))
+	projectData, err := json.Marshal(project)
+	if err != nil {
+		return fmt.Errorf("failed to marshal project: %w", err)
+	}
+
+	controllerResp, err := http.Post(fmt.Sprintf("%s/v2/projects", host), "application/json", bytes.NewBuffer(projectData))
+	if err != nil {
+		return fmt.Errorf("controller POST failed: %w", err)
+	}
 	defer controllerResp.Body.Close()
 
 	if controllerResp.StatusCode != http.StatusCreated {
 		body, _ := ioutil.ReadAll(controllerResp.Body)
-		return fmt.Errorf("Controller project create failed: %s", body)
+		return fmt.Errorf("controller project create failed: %s", body)
 	}
 
 	var projectResp map[string]interface{}
-	json.NewDecoder(controllerResp.Body).Decode(&projectResp)
-	projectID := projectResp["project_id"].(string)
+	if err := json.NewDecoder(controllerResp.Body).Decode(&projectResp); err != nil {
+		return fmt.Errorf("failed to decode controller response: %w", err)
+	}
+
+	projectID, ok := projectResp["project_id"].(string)
+	if !ok {
+		return fmt.Errorf("project_id missing or invalid in controller response: %v", projectResp)
+	}
+
 	d.SetId(projectID)
 	d.Set("project_id", projectID)
 
 	// Step 2: Create on compute
 	computePayload := Project{Name: projectName, ProjectID: projectID}
-	computeData, _ := json.Marshal(computePayload)
-	computeResp, _ := http.Post(fmt.Sprintf("%s/v2/compute/projects", host), "application/json", bytes.NewBuffer(computeData))
+	computeData, err := json.Marshal(computePayload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal compute payload: %w", err)
+	}
+
+	computeResp, err := http.Post(fmt.Sprintf("%s/v2/compute/projects", host), "application/json", bytes.NewBuffer(computeData))
+	if err != nil {
+		return fmt.Errorf("compute POST failed: %w", err)
+	}
 	defer computeResp.Body.Close()
 
 	if computeResp.StatusCode != http.StatusCreated && computeResp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(computeResp.Body)
-		return fmt.Errorf("Compute project create failed: %s", body)
+		return fmt.Errorf("compute project create failed: %s", body)
 	}
 
-	// Step 3: Open the project (optional but useful)
-	// Sync with controller by re-opening the project
-	openURL := fmt.Sprintf("%s/v2/projects/%s/open", config.Host, projectID)
+	// Step 3: Open the project on controller
+	openURL := fmt.Sprintf("%s/v2/projects/%s/open", host, projectID)
 	openReq, err := http.NewRequest("POST", openURL, nil)
 	if err != nil {
-		return fmt.Errorf("failed to prepare open project request to controller: %s", err)
+		return fmt.Errorf("failed to prepare open project request: %w", err)
 	}
 
 	openResp, err := http.DefaultClient.Do(openReq)
 	if err != nil {
-		return fmt.Errorf("failed to open/sync project with controller: %s", err)
+		return fmt.Errorf("failed to open/sync project on controller: %w", err)
 	}
 	defer openResp.Body.Close()
 
 	if openResp.StatusCode != http.StatusOK && openResp.StatusCode != http.StatusCreated {
 		body, _ := ioutil.ReadAll(openResp.Body)
-		return fmt.Errorf("failed to open/sync project on controller, status: %d, response: %s", openResp.StatusCode, string(body))
+		return fmt.Errorf("failed to open/sync project, status: %d, response: %s", openResp.StatusCode, string(body))
 	}
 
 	return nil

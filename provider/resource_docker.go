@@ -16,7 +16,8 @@ type DockerProperties struct {
 	Image        string   `json:"image"`
 	Environment  *string  `json:"environment,omitempty"`
 	ConsoleType  string   `json:"console_type"`
-	ExtraVolumes []string `json:"extra_volumes,omitempty"` // Moved inside properties
+	ExtraVolumes []string `json:"extra_volumes,omitempty"`
+	StartCommand *string  `json:"start_command,omitempty"`
 }
 
 // DockerNode represents the JSON payload for creating a Docker node.
@@ -93,6 +94,17 @@ func resourceGns3Docker() *schema.Resource {
 				Computed:    true,
 				Description: "The unique identifier for the Docker node returned by the API.",
 			},
+			"start_command": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Command to run when starting the Docker container.",
+			},
+			"start": {
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Default:     true,
+				Description: "Whether to start the Docker container after creation.",
+			},
 		},
 	}
 }
@@ -104,8 +116,8 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
 	image := d.Get("image").(string)
-	x := d.Get("x").(int) // Retrieve X coordinate
-	y := d.Get("y").(int) // Retrieve Y coordinate
+	x := d.Get("x").(int)
+	y := d.Get("y").(int)
 
 	// Convert environment map into a single string format (comma-separated key=value pairs)
 	var envStr *string
@@ -127,8 +139,14 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	// Build the payload for the Docker node.
-	// Place extra_volumes inside Properties.
+	// Retrieve optional start_command
+	var startCommand *string
+	if v, ok := d.GetOk("start_command"); ok {
+		cmd := v.(string)
+		startCommand = &cmd
+	}
+
+	// Build the payload for the Docker node
 	dockerNode := DockerNode{
 		Name:      name,
 		NodeType:  "docker",
@@ -137,21 +155,21 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 		Y:         y,
 		Properties: DockerProperties{
 			Image:        image,
-			Environment:  envStr, // Formatted as a single string
+			Environment:  envStr,
 			ConsoleType:  "none",
 			ExtraVolumes: extraVolumes,
+			StartCommand: startCommand,
 		},
 	}
 
+	// Marshal the request
 	data, err := json.Marshal(dockerNode)
 	if err != nil {
 		return fmt.Errorf("failed to marshal docker node data: %s", err)
 	}
 
-	// API URL for creating a Docker node.
+	// Create node via API
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
-
-	// Send the HTTP request.
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %s", err)
@@ -166,13 +184,11 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	body, _ := ioutil.ReadAll(resp.Body)
-
-	// Validate response.
 	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("failed to create Docker node, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse response JSON to get the node ID.
+	// Parse created response
 	var createdDocker DockerNode
 	if err := json.Unmarshal(body, &createdDocker); err != nil {
 		return fmt.Errorf("failed to decode Docker node response: %s", err)
@@ -182,9 +198,29 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Store the Docker node ID in Terraform state.
+	// Save ID
 	d.SetId(createdDocker.NodeID)
 	d.Set("docker_id", createdDocker.NodeID)
+
+	// Optionally start the container
+	if d.Get("start").(bool) {
+		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", host, projectID, createdDocker.NodeID)
+		startReq, err := http.NewRequest("POST", startURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to build start request: %s", err)
+		}
+		startResp, err := client.Do(startReq)
+		if err != nil {
+			return fmt.Errorf("failed to start docker node: %s", err)
+		}
+		defer startResp.Body.Close()
+
+		if startResp.StatusCode != http.StatusOK {
+			startBody, _ := ioutil.ReadAll(startResp.Body)
+			return fmt.Errorf("failed to start docker node, status code: %d, response: %s", startResp.StatusCode, string(startBody))
+		}
+	}
+
 	return nil
 }
 
@@ -256,6 +292,9 @@ func resourceGns3DockerUpdate(d *schema.ResourceData, meta interface{}) error {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
 		return fmt.Errorf("failed to update Docker node, status code: %d, response: %s", resp.StatusCode, string(body))
+	}
+	if d.HasChange("start_command") {
+		updateData["start_command"] = d.Get("start_command").(string)
 	}
 
 	return resourceGns3DockerRead(d, meta)
