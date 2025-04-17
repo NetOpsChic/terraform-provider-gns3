@@ -21,7 +21,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.0.0"
+      version = ">=2.5.0"
     }
   }
 }
