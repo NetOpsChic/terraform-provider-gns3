@@ -82,6 +82,8 @@ resource "gns3_docker" "dhcp_server" {
   environment = {
    
   }
+  start      = true
+  start_command  = /bin/sh
 
   x = 500
   y = 300
@@ -123,7 +125,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "1.1.0"
+      version = "2.5.0"
     }
   }
 }
