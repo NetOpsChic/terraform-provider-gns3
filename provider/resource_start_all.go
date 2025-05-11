@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 
@@ -16,8 +17,9 @@ func resourceGns3StartAll() *schema.Resource {
 		Update: resourceGns3StartAllUpdate,
 		Delete: resourceGns3StartAllDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3StartAllImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
@@ -69,4 +71,22 @@ func resourceGns3StartAllDelete(d *schema.ResourceData, meta interface{}) error 
 	// For now, we'll simply remove the resource from state.
 	d.SetId("")
 	return nil
+}
+func resourceGns3StartAllImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	projectID := d.Id()
+
+	if projectID == "" {
+		return nil, fmt.Errorf("missing project_id for gns3_start_all import")
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, fmt.Errorf("failed to set project_id: %s", err)
+	}
+
+	d.SetId(projectID + "-start")
+	return []*schema.ResourceData{d}, nil
 }

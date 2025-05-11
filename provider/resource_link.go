@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -58,8 +60,9 @@ func resourceGns3Link() *schema.Resource {
 		Update: resourceGns3LinkUpdate,
 		Delete: resourceGns3LinkDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3LinkImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
@@ -281,4 +284,26 @@ func resourceGns3LinkDelete(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3LinkImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var projectID, linkID string
+
+	if parts := strings.SplitN(raw, "/", 2); len(parts) == 2 {
+		projectID = parts[0]
+		linkID = parts[1]
+	} else {
+		return nil, fmt.Errorf("invalid import ID format %q: expected <project_id>/<link_id>", raw)
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, fmt.Errorf("failed to set project_id during import: %s", err)
+	}
+	d.SetId(linkID)
+
+	return []*schema.ResourceData{d}, nil
 }

@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -16,12 +18,9 @@ type Switch struct {
 	NodeType  string `json:"node_type"`
 	ComputeID string `json:"compute_id,omitempty"`
 	NodeID    string `json:"node_id,omitempty"`
-	X         int    `json:"x,omitempty"` // ✅ Added X coordinate
-	Y         int    `json:"y,omitempty"` // ✅ Added Y coordinate
+	X         int    `json:"x,omitempty"`
+	Y         int    `json:"y,omitempty"`
 }
-
-// Default switch symbol icon
-var defaultSwitchIcon = []byte("RAW_DATA_FOR_SWITCH_ICON")
 
 // resourceGns3Switch defines the Terraform resource schema for GNS3 switch nodes.
 func resourceGns3Switch() *schema.Resource {
@@ -31,8 +30,9 @@ func resourceGns3Switch() *schema.Resource {
 		Update: resourceGns3SwitchUpdate,
 		Delete: resourceGns3SwitchDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3SwitchImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
@@ -227,4 +227,26 @@ func resourceGns3SwitchDelete(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3SwitchImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var projectID, nodeID string
+
+	if parts := strings.SplitN(raw, "/", 2); len(parts) == 2 {
+		projectID = parts[0]
+		nodeID = parts[1]
+	} else {
+		return nil, fmt.Errorf("invalid import ID %q — expected format <project_id>/<node_id>", raw)
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+	d.SetId(nodeID)
+
+	return []*schema.ResourceData{d}, nil
 }

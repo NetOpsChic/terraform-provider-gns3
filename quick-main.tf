@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.5.2"
+      version = "2.5.3"
     }
   }
 }
@@ -12,7 +12,7 @@ provider "gns3" {
 }
 
 resource "gns3_project" "project1" {
-  name = "test-read-delete"
+  name = "test-import-1"
 }
 
 # ✅ ZTP Template Node (replaces gns3_docker)

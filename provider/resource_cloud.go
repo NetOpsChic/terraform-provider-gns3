@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -16,14 +18,10 @@ type Cloud struct {
 	NodeType  string `json:"node_type"`
 	ComputeID string `json:"compute_id,omitempty"`
 	NodeID    string `json:"node_id,omitempty"`
-	X         int    `json:"x,omitempty"` // ✅ Added X coordinate
-	Y         int    `json:"y,omitempty"` // ✅ Added Y coordinate
+	X         int    `json:"x,omitempty"`
+	Y         int    `json:"y,omitempty"`
 }
 
-// Default cloud symbol icon
-var defaultCloudIcon = []byte("RAW_DATA_FOR_CLOUD_ICON")
-
-// resourceGns3Cloud defines the Terraform resource schema for GNS3 cloud nodes.
 func resourceGns3Cloud() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3CloudCreate,
@@ -31,8 +29,9 @@ func resourceGns3Cloud() *schema.Resource {
 		Update: resourceGns3CloudUpdate,
 		Delete: resourceGns3CloudDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3CloudImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
@@ -225,4 +224,26 @@ func resourceGns3CloudDelete(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3CloudImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var projectID, nodeID string
+
+	if parts := strings.SplitN(raw, "/", 2); len(parts) == 2 {
+		projectID = parts[0]
+		nodeID = parts[1]
+	} else {
+		return nil, fmt.Errorf("invalid import ID %q — expected format <project_id>/<node_id>", raw)
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+	d.SetId(nodeID)
+
+	return []*schema.ResourceData{d}, nil
 }

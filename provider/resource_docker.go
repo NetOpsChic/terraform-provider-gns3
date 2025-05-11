@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -38,8 +39,9 @@ func resourceGns3Docker() *schema.Resource {
 		Update: resourceGns3DockerUpdate,
 		Delete: resourceGns3DockerDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3DockerImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:        schema.TypeString,
@@ -320,4 +322,26 @@ func resourceGns3DockerDelete(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3DockerImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var projectID, nodeID string
+
+	if parts := strings.SplitN(raw, "/", 2); len(parts) == 2 {
+		projectID = parts[0]
+		nodeID = parts[1]
+	} else {
+		return nil, fmt.Errorf("invalid import ID %q — expected format <project_id>/<node_id>", raw)
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+	d.SetId(nodeID)
+
+	return []*schema.ResourceData{d}, nil
 }

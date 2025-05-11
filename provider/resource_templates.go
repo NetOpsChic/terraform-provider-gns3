@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -18,8 +20,9 @@ func resourceGns3Template() *schema.Resource {
 		Update: resourceGns3TemplateUpdate,
 		Delete: resourceGns3TemplateDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3TemplateImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"project_id": {
 				Type:     schema.TypeString,
@@ -124,27 +127,26 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*ProviderConfig)
 	host := config.Host
-	templateID := d.Id()
+	projectID := d.Get("project_id").(string)
+	nodeID := d.Id()
 
-	url := fmt.Sprintf("%s/v2/templates/%s", host, templateID)
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
 	resp, err := http.Get(url)
 	if err != nil {
-		return fmt.Errorf("error reading GNS3 template: %s", err)
+		return fmt.Errorf("error reading GNS3 node (template): %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Template was deleted externally; remove from Terraform state
 		d.SetId("")
 		return nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("failed to read template, status code: %d, response: %s", resp.StatusCode, string(body))
+		return fmt.Errorf("failed to read template node, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Optionally: parse response and sync fields if needed
 	return nil
 }
 
@@ -221,4 +223,26 @@ func resourceGns3TemplateDelete(d *schema.ResourceData, meta interface{}) error 
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3TemplateImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var projectID, nodeID string
+
+	if strings.Contains(raw, "/") {
+		parts := strings.SplitN(raw, "/", 2)
+		projectID = parts[0]
+		nodeID = parts[1]
+	} else {
+		return nil, fmt.Errorf("invalid ID format %q — expected <project_id>/<node_id>", raw)
+	}
+
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+	d.SetId(nodeID)
+	return []*schema.ResourceData{d}, nil
 }

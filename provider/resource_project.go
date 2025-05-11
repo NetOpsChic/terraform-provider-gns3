@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -24,8 +25,9 @@ func resourceGns3Project() *schema.Resource {
 		Update: resourceGns3ProjectUpdate,
 		Delete: resourceGns3ProjectDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceGns3ProjectImporter,
 		},
+
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Type:        schema.TypeString,
@@ -217,4 +219,22 @@ func resourceGns3ProjectDelete(d *schema.ResourceData, meta interface{}) error {
 
 	d.SetId("")
 	return nil
+}
+func resourceGns3ProjectImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	// Directly accept project_id as the import ID
+	projectID := d.Id()
+	if projectID == "" {
+		return nil, fmt.Errorf("project_id must not be empty")
+	}
+
+	// Set it to both state and schema
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+
+	return []*schema.ResourceData{d}, nil
 }
