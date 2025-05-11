@@ -2,7 +2,7 @@ terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = "2.5.0"
+      version = "2.5.1"
     }
   }
 }
@@ -12,17 +12,22 @@ provider "gns3" {
 }
 
 resource "gns3_project" "project1" {
-  name = "test-new-feature"
+  name = "cisco-ztp"
 }
 
-# ✅ ZTP Docker Node
-resource "gns3_docker" "ztp" {
-  project_id = gns3_project.project1.project_id
-  name       = "ztp-server"
-  compute_id = "local"
-  image      = "ztp-container:latest" # Make sure this image is pulled on the GNS3 host
-  start_command = "/bin/bash /usr/local/bin/startup.sh"
-  start         = true  # Or false to delay startup
+# ✅ ZTP Template Node (replaces gns3_docker)
+data "gns3_template_id" "ztp" {
+  name = "ztp-container"
+}
+
+resource "gns3_template" "ztp" {
+  project_id  = gns3_project.project1.id
+  template_id = data.gns3_template_id.ztp.id
+  name        = "ztp-server"
+  compute_id  = "local"
+  start       = true
+  x           = 100
+  y           = 100
 }
 
 # ☁️ Cloud
@@ -37,106 +42,27 @@ resource "gns3_switch" "mgmt_switch" {
   project_id = gns3_project.project1.project_id
 }
 
-# 🛠️ Routers (QEMU Nodes)
-resource "gns3_qemu_node" "R1" {
+# 🧠 Cisco CSR1000v (QEMU Node)
+resource "gns3_qemu_node" "csr1" {
   project_id     = gns3_project.project1.project_id
-  name           = "R1"
-  adapter_type   = "e1000"
-  adapters       = 3
-  hda_disk_image = "/home/netopschic/Templates/veos-4.29.2F/hda.qcow2"
+  name           = "CSR1"
+  adapter_type   = "virtio-net-pci"
+  adapters       = 10
+  hda_disk_image = "/home/netopschic/Templates/csr1000vng-universalk9.17.03.05-serial/virtioa.qcow2"
   console_type   = "telnet"
+  options        = "-nographic -serial mon:stdio"
   cpus           = 2
-  ram            = 2056
-  mac_address    = "00:1c:73:aa:bc:01"
-  options        = "-boot order=c -smbios type=1,serial=R1"
-  platform       = "x86_64"
-  start_vm       = true
-}
-
-resource "gns3_qemu_node" "R2" {
-  project_id     = gns3_project.project1.project_id
-  name           = "R2"
-  adapter_type   = "e1000"
-  adapters       = 3
-  hda_disk_image = "/home/netopschic/Templates/veos-4.29.2F/hda.qcow2"
-  console_type   = "telnet"
-  cpus           = 2
-  ram            = 2056
-  mac_address    = "00:1c:73:aa:bc:02"
-  options        = "-boot order=c -smbios type=1,serial=R2"
-  platform       = "x86_64"
-  start_vm       = true
-}
-
-resource "gns3_qemu_node" "R3" {
-  project_id     = gns3_project.project1.project_id
-  name           = "R3"
-  adapter_type   = "e1000"
-  adapters       = 3
-  hda_disk_image = "/home/netopschic/Templates/veos-4.29.2F/hda.qcow2"
-  console_type   = "telnet"
-  cpus           = 2
-  ram            = 2056
-  mac_address    = "00:1c:73:aa:bc:03"
-  options        = "-boot order=c -smbios type=1,serial=R3"
+  ram            = 8192
+  mac_address    = "00:1b:54:cc:dd:ee" 
   platform       = "x86_64"
   start_vm       = true
 }
 
 # 🔗 Links
-resource "gns3_link" "R1_to_R2" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_qemu_node.R1.id
-  node_a_adapter = 1
-  node_a_port    = 0
-  node_b_id      = gns3_qemu_node.R2.id
-  node_b_adapter = 1
-  node_b_port    = 0
-}
 
-resource "gns3_link" "R2_to_R3" {
+resource "gns3_link" "csr_to_switch" {
   project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_qemu_node.R2.id
-  node_a_adapter = 2
-  node_a_port    = 0
-  node_b_id      = gns3_qemu_node.R3.id
-  node_b_adapter = 1
-  node_b_port    = 0
-}
-
-resource "gns3_link" "R1_to_switch" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_qemu_node.R1.id
-  node_a_adapter = 0
-  node_a_port    = 0
-  node_b_id      = gns3_switch.mgmt_switch.id
-  node_b_adapter = 0
-  node_b_port    = 3
-}
-
-resource "gns3_link" "R2_to_switch" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_qemu_node.R2.id
-  node_a_adapter = 0
-  node_a_port    = 0
-  node_b_id      = gns3_switch.mgmt_switch.id
-  node_b_adapter = 0
-  node_b_port    = 4
-}
-
-resource "gns3_link" "R3_to_switch" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_qemu_node.R3.id
-  node_a_adapter = 0
-  node_a_port    = 0
-  node_b_id      = gns3_switch.mgmt_switch.id
-  node_b_adapter = 0
-  node_b_port    = 5
-}
-
-resource "gns3_link" "ZTP_to_switch" {
-  project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_docker.ztp.id
+  node_a_id      = gns3_qemu_node.csr1.id
   node_a_adapter = 0
   node_a_port    = 0
   node_b_id      = gns3_switch.mgmt_switch.id
@@ -144,12 +70,22 @@ resource "gns3_link" "ZTP_to_switch" {
   node_b_port    = 1
 }
 
-resource "gns3_link" "Cloud_to_switch" {
+resource "gns3_link" "ztp_to_switch" {
   project_id     = gns3_project.project1.project_id
-  node_a_id      = gns3_cloud.cloud.id
+  node_a_id      = gns3_template.ztp.id
   node_a_adapter = 0
   node_a_port    = 0
   node_b_id      = gns3_switch.mgmt_switch.id
   node_b_adapter = 0
   node_b_port    = 2
+}
+
+resource "gns3_link" "cloud_to_switch" {
+  project_id     = gns3_project.project1.project_id
+  node_a_id      = gns3_cloud.cloud.id
+  node_a_adapter = 0
+  node_a_port    = 1
+  node_b_id      = gns3_switch.mgmt_switch.id
+  node_b_adapter = 0
+  node_b_port    = 3
 }

@@ -2,10 +2,12 @@ package provider
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -18,7 +20,7 @@ func resourceGns3Qemu() *schema.Resource {
 		Update: resourceGns3QemuUpdate,
 		Delete: resourceGns3QemuDelete,
 		Importer: &schema.ResourceImporter{
-			StateContext: schema.ImportStatePassthroughContext,
+			StateContext: resourceQemuImporter, // use custom importer
 		},
 		Schema: map[string]*schema.Schema{
 			"project_id": {
@@ -211,7 +213,8 @@ func resourceGns3QemuRead(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	apiURL := fmt.Sprintf("%s/v2/compute/projects/%s/qemu/nodes/%s", config.APIURL, projectID, nodeID)
+	// Use the controller's project/node endpoint, not the compute API path
+	apiURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", config.Host, projectID, nodeID)
 	resp, err := http.Get(apiURL)
 	if err != nil {
 		return fmt.Errorf("failed to read QEMU node: %s", err)
@@ -232,7 +235,6 @@ func resourceGns3QemuRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.Set("name", node["name"])
-	// Optionally, set additional fields from the API response.
 	return nil
 }
 
@@ -246,7 +248,8 @@ func resourceGns3QemuDelete(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	apiURL := fmt.Sprintf("%s/v2/compute/projects/%s/qemu/nodes/%s", config.APIURL, projectID, nodeID)
+	// Use the controller's project/node endpoint for delete as well
+	apiURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", config.Host, projectID, nodeID)
 	req, err := http.NewRequest("DELETE", apiURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create DELETE request: %s", err)
@@ -265,4 +268,39 @@ func resourceGns3QemuDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	d.SetId("")
 	return nil
+}
+
+// resourceQemuImporter supports both comma- and slash-separated import IDs:
+//
+//	<node_id>,<project_id>
+//	<project_id>/<node_id>
+func resourceQemuImporter(
+	ctx context.Context,
+	d *schema.ResourceData,
+	meta interface{},
+) ([]*schema.ResourceData, error) {
+	raw := d.Id()
+	var nodeID, projectID string
+
+	if strings.Contains(raw, ",") {
+		parts := strings.SplitN(raw, ",", 2)
+		nodeID, projectID = parts[0], parts[1]
+	} else if strings.Contains(raw, "/") {
+		parts := strings.SplitN(raw, "/", 2)
+		projectID, nodeID = parts[0], parts[1]
+	} else {
+		return nil, fmt.Errorf(
+			"invalid import ID %q: expected <node_id>,<project_id> or <project_id>/<node_id>",
+			raw,
+		)
+	}
+
+	// seed the required attribute:
+	if err := d.Set("project_id", projectID); err != nil {
+		return nil, err
+	}
+	// Terraform resource ID must be the node ID:
+	d.SetId(nodeID)
+
+	return []*schema.ResourceData{d}, nil
 }
