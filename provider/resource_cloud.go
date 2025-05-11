@@ -113,12 +113,6 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Update cloud node symbol
-	err = updateCloudSymbol(host, createdCloud.NodeID)
-	if err != nil {
-		return err
-	}
-
 	d.SetId(createdCloud.NodeID)
 	d.Set("cloud_id", createdCloud.NodeID)
 	return nil
@@ -181,7 +175,29 @@ func resourceGns3CloudUpdate(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceGns3CloudRead(d *schema.ResourceData, meta interface{}) error {
-	// Optional: Implement if needed for state reconciliation
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	nodeID := d.Id()
+
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("error reading cloud node: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Node no longer exists in GNS3 — mark resource as gone
+		d.SetId("")
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("unexpected read status %d: %s", resp.StatusCode, body)
+	}
+
 	return nil
 }
 
@@ -208,26 +224,5 @@ func resourceGns3CloudDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId("")
-	return nil
-}
-
-// updateCloudSymbol updates the cloud node symbol to the default cloud icon.
-func updateCloudSymbol(host, nodeID string) error {
-	symbolID := ":/symbols/classic/cloud.svg"
-	symbolURL := fmt.Sprintf("%s/v2/symbols/%s/raw", host, symbolID)
-
-	req, err := http.NewRequest("POST", symbolURL, bytes.NewBuffer(defaultCloudIcon))
-	if err != nil {
-		return fmt.Errorf("failed to create symbol update request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update cloud symbol: %s", err)
-	}
-	defer resp.Body.Close()
-
 	return nil
 }

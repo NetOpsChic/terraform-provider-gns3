@@ -114,12 +114,6 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Update switch node symbol
-	err = updateSwitchSymbol(host, createdSwitch.NodeID)
-	if err != nil {
-		return err
-	}
-
 	d.SetId(createdSwitch.NodeID)
 	d.Set("switch_id", createdSwitch.NodeID)
 	return nil
@@ -182,7 +176,30 @@ func resourceGns3SwitchUpdate(d *schema.ResourceData, meta interface{}) error {
 }
 
 func resourceGns3SwitchRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally implement reading to reconcile state.
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	nodeID := d.Id()
+
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to read switch node: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Node no longer exists
+		d.SetId("")
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to read switch node, status code: %d, body: %s", resp.StatusCode, body)
+	}
+
+	// Optional: parse attributes and update d.Set(...)
 	return nil
 }
 
@@ -209,26 +226,5 @@ func resourceGns3SwitchDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId("")
-	return nil
-}
-
-// updateSwitchSymbol updates the switch node symbol to the default ethernet switch icon.
-func updateSwitchSymbol(host, nodeID string) error {
-	symbolID := ":/symbols/classic/ethernet_switch.svg"
-	symbolURL := fmt.Sprintf("%s/v2/symbols/%s/raw", host, symbolID)
-
-	req, err := http.NewRequest("POST", symbolURL, bytes.NewBuffer(defaultSwitchIcon))
-	if err != nil {
-		return fmt.Errorf("failed to create symbol update request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/octet-stream")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update switch symbol: %s", err)
-	}
-	defer resp.Body.Close()
-
 	return nil
 }

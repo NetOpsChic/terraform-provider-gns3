@@ -169,9 +169,31 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	return nil
 }
 
-// resourceGns3LinkRead reads the link resource. This implementation is currently a no-op.
 func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally, implement a GET request to refresh state.
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	projectID := d.Get("project_id").(string)
+	linkID := d.Id()
+
+	url := fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("error reading GNS3 link: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Link no longer exists in GNS3, remove from state
+		d.SetId("")
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to read link, status code: %d, response: %s", resp.StatusCode, string(body))
+	}
+
+	// Optionally parse and update fields if needed
 	return nil
 }
 
@@ -238,6 +260,7 @@ func resourceGns3LinkDelete(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return fmt.Errorf("error creating delete request: %s", err)
 	}
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -245,8 +268,15 @@ func resourceGns3LinkDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	// Ignore 404 errors during delete — treat as already gone
+	if resp.StatusCode == http.StatusNotFound {
+		d.SetId("")
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("failed to delete GNS3 link, status code: %d", resp.StatusCode)
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete GNS3 link, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	d.SetId("")

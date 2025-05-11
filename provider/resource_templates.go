@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -121,7 +122,29 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 }
 
 func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
-	// Optionally implement a call to refresh the template state from the API.
+	config := meta.(*ProviderConfig)
+	host := config.Host
+	templateID := d.Id()
+
+	url := fmt.Sprintf("%s/v2/templates/%s", host, templateID)
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("error reading GNS3 template: %s", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		// Template was deleted externally; remove from Terraform state
+		d.SetId("")
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to read template, status code: %d, response: %s", resp.StatusCode, string(body))
+	}
+
+	// Optionally: parse response and sync fields if needed
 	return nil
 }
 
@@ -171,18 +194,29 @@ func resourceGns3TemplateDelete(d *schema.ResourceData, meta interface{}) error 
 	config := meta.(*ProviderConfig)
 	host := config.Host
 	projectID := d.Get("project_id").(string)
-	templateID := d.Id()
+	nodeID := d.Id()
 
-	req, _ := http.NewRequest("DELETE", fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, templateID), nil)
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create delete request for template node: %s", err)
+	}
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("error deleting GNS3 template: %s", err)
+		return fmt.Errorf("failed to delete template node: %s", err)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		d.SetId("")
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("failed to delete GNS3 template, status code: %d", resp.StatusCode)
+		body, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete template node, status code: %d, body: %s", resp.StatusCode, body)
 	}
 
 	d.SetId("")
