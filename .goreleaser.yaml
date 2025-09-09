@@ -3,15 +3,27 @@ project_name: terraform-provider-gns3
 
 before:
   hooks:
-    - |-
-      bash -lc 'VER=$(echo $GORELEASER_CURRENT_TAG | sed "s/^v//"); cat > "terraform-provider-gns3_${VER}_manifest.json" << "EOF"
+    - |
+      bash -lc '
+      set -euo pipefail
+      VER="${GORELEASER_CURRENT_TAG:-}"
+      VER="${VER#v}"
+      if [ -z "$VER" ]; then
+        VER="${GITHUB_REF_NAME:-}"
+        VER="${VER#v}"
+      fi
+      if [ -z "$VER" ]; then
+        echo "ERROR: could not detect version (GORELEASER_CURRENT_TAG/GITHUB_REF_NAME empty)"; exit 1
+      fi
+      cat > "terraform-provider-gns3_${VER}_manifest.json" << "EOF"
       {
         "version": 1,
         "metadata": {
           "protocol_versions": ["6.0"]
         }
       }
-      EOF'
+      EOF
+      '
 
 builds:
   - id: provider
