@@ -1,58 +1,61 @@
+version: 2
 project_name: terraform-provider-gns3
 
 before:
   hooks:
-    - go mod tidy
+    - |-
+      bash -lc 'VER=${GORELEASER_CURRENT_TAG#v}; cat > "terraform-provider-gns3_${VER}_manifest.json" << "EOF"
+      {
+        "version": 1,
+        "metadata": {
+          "protocol_versions": ["6.0"]
+        }
+      }
+      EOF'
 
 builds:
   - id: provider
     main: .
     env:
-      - CGO_ENABLED=0         # static binaries (fixes Docker/glibc issues)
+      - CGO_ENABLED=0          # static Linux binary
     ldflags:
       - -s -w
-    goos: [linux, darwin, windows]
+    goos: [darwin, linux]
     goarch: [amd64, arm64]
-    binary: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    binary: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    ignore:
+      - goos: linux
+        goarch: arm64          # only linux/amd64 + both darwin arches
 
 archives:
   - id: zips
-    builds: [provider]
-    format: zip
+    formats: [zip]
     files: []
-    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    name_template: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
 
 checksum:
-  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  name_template: 'terraform-provider-gns3_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
 
 signs:
-  - artifacts: checksum
+  - id: gpg-sum
+    artifacts: checksum
     cmd: gpg
+    signature: "${artifact}.sig"
     args:
+      - --batch
+      - --yes
+      - --pinentry-mode
+      - loopback
+      - --passphrase
+      - "{{ .Env.PASSPHRASE }}"
       - --output
-      - '{{ .ArtifactPath }}.sig'
+      - "${signature}"
       - --detach-sign
-      - '{{ .ArtifactPath }}'
-
-changelog:
-  use: git
-  sort: asc
-  groups:
-    - title: Features
-      regexp: '^feat(\(.+\))?:'
-    - title: Fixes
-      regexp: '^fix(\(.+\))?:'
-    - title: Docs
-      regexp: '^docs(\(.+\))?:'
-    - title: Chores
-      regexp: '^(chore|ci)(\(.+\))?:'
-  filters:
-    exclude:
-      - '^test:'
-      - '^merge'
-      - '^wip'
+      - "${artifact}"
 
 release:
   draft: false
-  prerelease: false
+  prerelease: "false"          # must be a string in v2
+  extra_files:
+    - glob: "terraform-provider-gns3_*_manifest.json"
