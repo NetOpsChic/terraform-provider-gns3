@@ -2,13 +2,17 @@ name: release
 on:
   push:
     tags:
-      - v*   # tag like v2.5.4 to trigger
+      - 'v*'          # tag like v2.5.4
+
+permissions:
+  contents: write
 
 jobs:
-  goreleaser:
+  release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    environment:
+      name: workflow   # <-- must match the environment that holds your secrets
+
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
@@ -16,7 +20,6 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version: '1.22.x' }
 
-      # Use your existing secrets
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@v6
         with:
@@ -30,4 +33,6 @@ jobs:
           version: latest
           args: release --clean
         env:
-          GITHUB_TOKEN: ${{ secrets.TOKEN }}   # use your TOKEN secret
+          # use your environment secret TOKEN (or switch to ${{ secrets.GITHUB_TOKEN }})
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+          PASSPHRASE:   ${{ secrets.PASSPHRASE }}
