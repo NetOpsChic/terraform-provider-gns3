@@ -3,19 +3,16 @@ project_name: terraform-provider-gns3
 
 before:
   hooks:
+    - go mod tidy
+    # Create the manifest in dist/, with a robust version source and fail-fast.
     - |
       bash -lc '
       set -euo pipefail
-      VER="${GORELEASER_CURRENT_TAG:-}"
-      VER="${VER#v}"
-      if [ -z "$VER" ]; then
-        VER="${GITHUB_REF_NAME:-}"
-        VER="${VER#v}"
-      fi
-      if [ -z "$VER" ]; then
-        echo "ERROR: could not detect version (GORELEASER_CURRENT_TAG/GITHUB_REF_NAME empty)"; exit 1
-      fi
-      cat > "terraform-provider-gns3_${VER}_manifest.json" << "EOF"
+      VER="${GORELEASER_CURRENT_TAG:-}"; VER="${VER#v}"
+      if [ -z "$VER" ]; then VER="${GITHUB_REF_NAME:-}"; VER="${VER#v}"; fi
+      if [ -z "$VER" ]; then echo "ERROR: no version (tag) found"; exit 1; fi
+      mkdir -p dist
+      cat > "dist/terraform-provider-gns3_${VER}_manifest.json" << "EOF"
       {
         "version": 1,
         "metadata": {
@@ -28,22 +25,25 @@ before:
 builds:
   - id: provider
     main: .
-    env:
-      - CGO_ENABLED=0          # static Linux binary
-    ldflags:
-      - -s -w
+    env: [CGO_ENABLED=0]
+    ldflags: ["-s -w"]
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     binary: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
     ignore:
       - goos: linux
-        goarch: arm64          # only linux/amd64 + both darwin arches
+        goarch: arm64
 
 archives:
   - id: zips
     formats: [zip]
     files: []
     name_template: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+# NEW: register the manifest as an artifact so checksums include it
+files:
+  - src: 'dist/terraform-provider-gns3_{{ .Version }}_manifest.json'
+    dst: 'terraform-provider-gns3_{{ .Version }}_manifest.json'
 
 checksum:
   name_template: 'terraform-provider-gns3_{{ .Version }}_SHA256SUMS'
@@ -68,6 +68,4 @@ signs:
 
 release:
   draft: false
-  prerelease: "false"          # must be a string in v2
-  extra_files:
-    - glob: "terraform-provider-gns3_*_manifest.json"
+  prerelease: "false"
