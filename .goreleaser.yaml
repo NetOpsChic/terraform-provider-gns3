@@ -1,0 +1,58 @@
+project_name: terraform-provider-gns3
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: provider
+    main: .
+    env:
+      - CGO_ENABLED=0         # static binaries (fixes Docker/glibc issues)
+    ldflags:
+      - -s -w
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    binary: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+archives:
+  - id: zips
+    builds: [provider]
+    format: zip
+    files: []
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    cmd: gpg
+    args:
+      - --output
+      - '{{ .ArtifactPath }}.sig'
+      - --detach-sign
+      - '{{ .ArtifactPath }}'
+
+changelog:
+  use: git
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?:'
+    - title: Fixes
+      regexp: '^fix(\(.+\))?:'
+    - title: Docs
+      regexp: '^docs(\(.+\))?:'
+    - title: Chores
+      regexp: '^(chore|ci)(\(.+\))?:'
+  filters:
+    exclude:
+      - '^test:'
+      - '^merge'
+      - '^wip'
+
+release:
+  draft: false
+  prerelease: false
