@@ -10,8 +10,7 @@ before:
       VER="${GORELEASER_CURRENT_TAG:-}"; VER="${VER#v}"
       if [ -z "$VER" ]; then VER="${GITHUB_REF_NAME:-}"; VER="${VER#v}"; fi
       if [ -z "$VER" ]; then echo "ERROR: no version (tag) found"; exit 1; fi
-      mkdir -p dist
-      cat > "dist/terraform-provider-gns3_${VER}_manifest.json" << "EOF"
+      cat > "terraform-provider-gns3_${VER}_manifest.json" << "EOF"
       {
         "version": 1,
         "metadata": {
@@ -20,11 +19,36 @@ before:
       }
       EOF
       '
+
+builds:
+  - id: provider
+    main: .
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: linux
+        goarch: arm64
+    binary: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
+archives:
+  - id: zips
+    formats: [zip]
+    files: []
+    name_template: 'terraform-provider-gns3_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+
 checksum:
   name_template: 'terraform-provider-gns3_{{ .Version }}_SHA256SUMS'
   algorithm: sha256
   extra_files:
-    - glob: 'dist/terraform-provider-gns3_{{ .Version }}_manifest.json'
+    - glob: 'terraform-provider-gns3_{{ .Version }}_manifest.json'
       name_template: 'terraform-provider-gns3_{{ .Version }}_manifest.json'
 
 signs:
@@ -48,5 +72,5 @@ release:
   draft: false
   prerelease: "false"
   extra_files:
-    - glob: 'dist/terraform-provider-gns3_{{ .Version }}_manifest.json'
+    - glob: 'terraform-provider-gns3_{{ .Version }}_manifest.json'
       name_template: 'terraform-provider-gns3_{{ .Version }}_manifest.json'
