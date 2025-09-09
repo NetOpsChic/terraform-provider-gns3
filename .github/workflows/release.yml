@@ -34,5 +34,5 @@ jobs:
           args: release --clean
         env:
           # use your environment secret TOKEN (or switch to ${{ secrets.GITHUB_TOKEN }})
-          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PASSPHRASE:   ${{ secrets.PASSPHRASE }}
