@@ -139,7 +139,6 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		"adapters":     adapters,
 		"bios_image":   biosImage,
 		"cdrom_image":  "",
-		"console_type": consoleType,
 		"ram":          ram,
 		"cpus":         cpus,
 		"platform":     platform,
@@ -164,6 +163,7 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		"name":       name,
 		"node_type":  "qemu",
 		"compute_id": "local", // adjust if needed
+		"console_type": consoleType,
 		"properties": properties,
 	}
 
@@ -412,6 +412,9 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	  if v, ok := d.GetOk("console"); ok {
 		putPayload["console"] = v.(int)
 	  }
+    }
+	if d.HasChange("console_type") {
+      putPayload["console_type"] = d.Get("console_type").(string)
     }
 	if d.HasChange("x") {
 		if xv, ok := d.GetOkExists("x"); ok {
