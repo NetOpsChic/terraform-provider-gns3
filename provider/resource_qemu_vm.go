@@ -139,7 +139,6 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		"adapters":     adapters,
 		"bios_image":   biosImage,
 		"cdrom_image":  "",
-		"console_type": consoleType,
 		"ram":          ram,
 		"cpus":         cpus,
 		"platform":     platform,
@@ -147,9 +146,6 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 
 	if cdromImage != nil {
 		properties["cdrom_image"] = cdromImage.(string)
-	}
-	if consoleOk {
-		properties["console"] = consoleVal.(int)
 	}
 	if v, ok := d.GetOk("mac_address"); ok {
 		properties["mac_address"] = v.(string)
@@ -167,7 +163,12 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		"name":       name,
 		"node_type":  "qemu",
 		"compute_id": "local", // adjust if needed
+		"console_type": consoleType,
 		"properties": properties,
+	}
+
+	if consoleOk {
+		payload["console"] = consoleVal.(int)
 	}
 
 	// include x/y if explicitly set (even if zero)
@@ -367,16 +368,6 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 			delete(props, "cdrom_image")
 		}
 	}
-	if d.HasChange("console") {
-		if v, ok := d.GetOk("console"); ok {
-			props["console"] = v.(int)
-		} else {
-			delete(props, "console")
-		}
-	}
-	if d.HasChange("console_type") {
-		props["console_type"] = d.Get("console_type").(string)
-	}
 	if d.HasChange("cpus") {
 		props["cpus"] = d.Get("cpus").(int)
 	}
@@ -417,6 +408,14 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	if d.HasChange("name") {
 		putPayload["name"] = d.Get("name").(string)
 	}
+	if d.HasChange("console") {
+	  if v, ok := d.GetOk("console"); ok {
+		putPayload["console"] = v.(int)
+	  }
+    }
+	if d.HasChange("console_type") {
+      putPayload["console_type"] = d.Get("console_type").(string)
+    }
 	if d.HasChange("x") {
 		if xv, ok := d.GetOkExists("x"); ok {
 			putPayload["x"] = xv.(int)
@@ -427,7 +426,7 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 			putPayload["y"] = yv.(int)
 		}
 	}
-
+	
 	// 5) PUT update
 	data, err := json.Marshal(putPayload)
 	if err != nil {
