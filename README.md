@@ -1,27 +1,37 @@
-# Terraform Provider for GNS3
+
+# GNS3 Provider for Terraform & OpenTofu
 
 ## Overview
-The **Terraform Provider for GNS3** allows network engineers and DevOps professionals to automate the deployment and management of **GNS3 network topologies** using Terraform. This provider eliminates manual setup by enabling **Infrastructure as Code (IaC)** for network emulation environments.
+
+The **GNS3 Provider** allows network engineers and DevOps professionals to automate the deployment and management of **GNS3 network topologies**. By enabling **Infrastructure as Code (IaC)**, this provider eliminates manual GUI setup and ensures reproducible network emulation environments.
+
+This provider is officially compatible with both **Terraform** and **OpenTofu**.
 
 ## Features
-- Create and manage **GNS3 nodes** (Routers, Switches, Cloud and Links).
-- Define and configure **network links** between nodes.
-- Automate **GNS3 topology deployment** with Terraform.
+
+  - Create and manage **GNS3 nodes** (Routers, Switches, Docker containers, Cloud, and Links).
+  - Define and configure **network links** between nodes with adapter and port granularity.
+  - Automate **GNS3 topology deployment** and lifecycle (Start/Stop).
+  - Support for **QEMU nodes** with advanced hardware configuration.
 
 ## Installation
+
 ### Prerequisites
-- **Terraform** (>= v1.13.0)
-- **GNS3 Server** (>= v2.2.0) installed and running
-- **GNS3 API** enabled on your server
+
+  - **OpenTofu** (\>= v1.6.0) or **Terraform** (\>= v1.13.0)
+  - **GNS3 Server** (\>= v2.2.0) installed and running
+  - **GNS3 API** enabled on your server
 
 ### Configure the Provider
-Add the following to your Terraform configuration:
+
+Add the following to your configuration:
+
 ```hcl
 terraform {
   required_providers {
     gns3 = {
       source  = "netopschic/gns3"
-      version = ">=2.5.0"
+      version = ">=2.5.5"
     }
   }
 }
@@ -33,247 +43,107 @@ provider "gns3" {
 ```
 
 ### Install the Provider
+
+If using **OpenTofu**:
+
+```bash
+tofu init
+```
+
+If using **Terraform**:
+
 ```bash
 terraform init
 ```
 
-## Files
+## Usage
 
-- `provider.tf`: Configures the GNS3 provider.
-- `variables.tf`: Defines input variables.
-- `main.tf`: Contains resource definitions.
-- `outputs.tf`: Specifies output values.
+### Fetching Template ID
 
-## Usage 
+Templates must be created in the GNS3 GUI first. Use the data source to retrieve the ID by name.
 
-### Fetching Template_id Router 
 ```hcl
 data "gns3_template_id" "router_template" {
-  name = "c7200"  # Replace with the actual template name
+  name = "c7200" 
 }
 ```
+
 ### Creating a Project
-```hcl
-resource "gns3_project" "project1" {
-  name = "My-first-test-topology"
-}
-```
-### Creating a router or any device from template. Devices which are configured in gns3 can be deployed using this resource.
-```hcl
-# Previous configuration
-resource "gns3_router" "router1" {
-  # resource parameters
-}
 
-# Updated configuration
-resource "gns3_template" "router1" {
-  # resource parameters
+```hcl
+resource "gns3_project" "lab1" {
+  name = "NetOps-Automation-Lab"
 }
 ```
 
-### Creating a Docker container
+### Creating a QEMU Node
+
 ```hcl
-resource "gns3_docker" "dhcp_server" {
-  project_id = gns3_project.project1.project_id
-  name       = ""
-  compute_id = "local"
-  image      = ""
-
-  environment = {
-   
-  }
-  start      = true
-  start_command  = /bin/sh
-
-  x = 500
-  y = 300
+resource "gns3_qemu_node" "csr1" {
+  project_id     = gns3_project.lab1.id
+  name           = "CSR1"
+  adapter_type   = "virtio-net-pci"
+  adapters       = 10
+  hda_disk_image = "/path/to/image.qcow2"
+  ram            = 4096
+  cpus           = 2
+  start_vm       = true
 }
 ```
-### Creating a Switch
+
+### Creating a Link
+
 ```hcl
-resource "gns3_switch" "switch1" {
-  project_id = gns3_project.project1.id
-  name       = "Switch1"
-}
-```
-### Creating a Cloud
-```hcl
-resource "gns3_cloud" "cloud1" {
-  project_id = gns3_project.project1.id
-  name       = "Cloud1"
-}
-```
-### Starting all nodes
-```hcl
-resource "gns3_start_all" "start_nodes" {
-  project_id = gns3_project.project1.id
-}
-```
-### Creating a Link Between Nodes
-```hcl
-resource "gns3_link" "router1_to_switch" {
-  project_id = "your_project_id"
-  node_a     = gns3_node.router1.id
-  node_b     = gns3_node.switch1.id
-}
-```
-## Example Topology (For Quick Spin!)
-
-A **basic topology** connecting a router and a switch:
-```hcl
-terraform {
-  required_providers {
-    gns3 = {
-      source  = "netopschic/gns3"
-      version = "2.5.0"
-    }
-  }
-}
-
-provider "gns3" {
-  host = "http://localhost:3080"
-}
-
-# Create a GNS3 project
-resource "gns3_project" "project1" {
-  name = "simple-topology"
-}
-
-# Retrieve the template ID for the router
-data "gns3_template_id" "router_template" {
-  name = "c7200"  # Replace with your actual router template name
-}
-
-# Create a switch
-resource "gns3_switch" "switch1" {
-  project_id = gns3_project.project1.id
-  name       = "Switch1"
-  x          = 300
-  y          = 300
-}
-
-# Create a cloud node
-resource "gns3_cloud" "cloud1" {
-  project_id = gns3_project.project1.id
-  name       = "Cloud1"
-  x          = 500
-  y          = 100
-}
-
-# Create four routers positioned in a square layout
-resource "gns3_template" "router1" {
-  project_id  = gns3_project.project1.id
-  template_id = data.gns3_template_id.router_template.id
-  name        = "Router1"
-  compute_id  = "local"
-  x           = 100
-  y           = 100
-}
-
-resource "gns3_template" "router2" {
-  project_id  = gns3_project.project1.id
-  template_id = data.gns3_template_id.router_template.id
-  name        = "Router2"
-  compute_id  = "local"
-  x           = 500
-  y           = 100
-}
-
-resource "gns3_template" "router3" {
-  project_id  = gns3_project.project1.id
-  template_id = data.gns3_template_id.router_template.id
-  name        = "Router3"
-  compute_id  = "local"
-  x           = 500
-  y           = 500
-}
-
-resource "gns3_template" "router4" {
-  project_id  = gns3_project.project1.id
-  template_id = data.gns3_template_id.router_template.id
-  name        = "Router4"
-  compute_id  = "local"
-  x           = 100
-  y           = 500
-}
-
-# Define links to form a square topology
-resource "gns3_link" "link1" {
-  project_id     = gns3_project.project1.id
-  node_a_id      = gns3_template.router1.id
+resource "gns3_link" "link_1" {
+  project_id     = gns3_project.lab1.id
+  node_a_id      = gns3_qemu_node.csr1.id
   node_a_adapter = 0
   node_a_port    = 0
-  node_b_id      = gns3_template.router2.id
-  node_b_adapter = 0
-  node_b_port    = 0
-}
-
-resource "gns3_link" "link2" {
-  project_id     = gns3_project.project1.id
-  node_a_id      = gns3_template.router2.id
-  node_a_adapter = 0
-  node_a_port    = 1
-  node_b_id      = gns3_template.router3.id
+  node_b_id      = gns3_switch.switch1.id
   node_b_adapter = 0
   node_b_port    = 1
 }
-
-resource "gns3_link" "link3" {
-  project_id     = gns3_project.project1.id
-  node_a_id      = gns3_template.router3.id
-  node_a_adapter = 0
-  node_a_port    = 2
-  node_b_id      = gns3_template.router4.id
-  node_b_adapter = 0
-  node_b_port    = 2
-}
-
-resource "gns3_link" "link4" {
-  project_id     = gns3_project.project1.id
-  node_a_id      = gns3_template.router4.id
-  node_a_adapter = 0
-  node_a_port    = 3
-  node_b_id      = gns3_template.router1.id
-  node_b_adapter = 0
-  node_b_port    = 3
-}
-
-# Start all devices
-resource "gns3_start_all" "start_nodes" {
-  project_id = gns3_project.project1.id
-
-  depends_on = [
-    gns3_template.router1,
-    gns3_template.router2,
-    gns3_template.router3,
-    gns3_template.router4,
-    gns3_switch.switch1,
-    gns3_cloud.cloud1,
-    gns3_link.link1,
-    gns3_link.link2,
-    gns3_link.link3,
-    gns3_link.link4,
-  ]
-}
 ```
 
+## Example Topology
+
+A quick-start configuration to deploy a square topology with four routers:
+
+```hcl
+# See /examples directory for full HCL implementation
+```
+
+## Registry Status
+
+The GNS3 provider is published and verified on:
+
+  - [**OpenTofu Registry**](https://www.google.com/search?q=https://search.opentofu.org/provider/netopschic/gns3)
+  - [**Terraform Registry**](https://www.google.com/search?q=https://registry.terraform.io/providers/netopschic/gns3)
+
 ## Roadmap
-- [ ] Improve provider stability and error handling.
-- [ ] Add resource for more network devices
-- [ ] Enhance state management
+
+  - [x] **OpenTofu Verified Registry Support**
+  - [ ] Migrate to **Terraform Plugin Framework** for better state management.
+  - [ ] Improve provider stability and error handling for large-scale topologies.
+  - [ ] Add resource for NAT and Hub devices.
 
 ## Contributing
-Contributions are welcome! To contribute:
-1. Fork the repository.
-2. Create a new feature branch.
-3. Commit your changes.
-4. Open a pull request.
+
+Contributions are welcome\! Please feel free to:
+
+1.  Fork the repository.
+2.  Create a new feature branch.
+3.  Commit your changes.
+4.  Open a pull request.
 
 ## Issues & Feedback
-For issues, feature requests, or general discussion, please open a GitHub issue
+
+For bugs, feature requests, or general discussion, please open a [GitHub Issue](https://www.google.com/search?q=https://github.com/NetOpsChic/terraform-provider-gns3/issues).
 
 ## License
+
 This project is licensed under the **MIT License**.
 
----
-🚀 **Created & Maintained by [NetOpsChic](https://github.com/netopschic)**
+-----
+
+**Created & Maintained by [NetOpsChic](https://github.com/netopschic)**
