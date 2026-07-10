@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
@@ -16,20 +17,28 @@ import (
 type DockerProperties struct {
 	Image        string   `json:"image"`
 	Environment  *string  `json:"environment,omitempty"`
-	ConsoleType  string   `json:"console_type"`
 	ExtraVolumes []string `json:"extra_volumes,omitempty"`
 	StartCommand *string  `json:"start_command,omitempty"`
 }
 
-// DockerNode represents the JSON payload for creating a Docker node.
+// DockerNode represents the JSON payload for creating/reading a Docker node.
+// console and console_type are top-level Node attributes in the GNS3 API,
+// not emulator-specific properties — nesting them under properties works for
+// initial creation (GNS3 mirrors the value up to the top level) but updates
+// sent under properties are silently ignored, leaving GUI and API state out
+// of sync. They must be read and written at the top level.
 type DockerNode struct {
-	Name       string           `json:"name"`
-	NodeType   string           `json:"node_type"`
-	ComputeID  string           `json:"compute_id,omitempty"`
-	Properties DockerProperties `json:"properties"`
-	NodeID     string           `json:"node_id,omitempty"`
-	X          int              `json:"x,omitempty"` // Added X coordinate
-	Y          int              `json:"y,omitempty"` // Added Y coordinate
+	Name        string           `json:"name"`
+	NodeType    string           `json:"node_type"`
+	ComputeID   string           `json:"compute_id,omitempty"`
+	Console     int              `json:"console,omitempty"`
+	ConsoleType string           `json:"console_type,omitempty"`
+	Symbol      string           `json:"symbol,omitempty"`
+	Properties  DockerProperties `json:"properties"`
+	NodeID      string           `json:"node_id,omitempty"`
+	X           int              `json:"x,omitempty"`
+	Y           int              `json:"y,omitempty"`
+	Status      string           `json:"status,omitempty"`
 }
 
 func resourceGns3Docker() *schema.Resource {
@@ -73,20 +82,32 @@ func resourceGns3Docker() *schema.Resource {
 					Type: schema.TypeString,
 				},
 			},
-			"x": { // Added X coordinate support
+			"x": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "The X coordinate for positioning the Docker node in GNS3 GUI.",
 			},
-			"y": { // Added Y coordinate support
+			"y": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "The Y coordinate for positioning the Docker node in GNS3 GUI.",
 			},
+			"console": {
+				Type:        schema.TypeInt,
+				Optional:    true,
+				Computed:    true,
+				Description: "Console TCP port. Assigned automatically by GNS3 if not set.",
+			},
+			"console_type": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Default:     "none",
+				Description: "Console type for the Docker node (e.g. none, telnet, vnc).",
+			},
 			"extra_volumes": {
 				Type:        schema.TypeList,
 				Optional:    true,
-				Description: "A list of extra volume mappings in the format 'host_dir:container_dir'. This will be passed inside the properties.",
+				Description: "A list of extra volume mappings in the format 'host_dir:container_dir'.",
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
 				},
@@ -105,10 +126,33 @@ func resourceGns3Docker() *schema.Resource {
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     true,
-				Description: "Whether to start the Docker container after creation.",
+				Description: "Whether the Docker container should be running. Changing this after creation starts or stops the container.",
+			},
+			"symbol": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
+				Description: "Icon/symbol for the node on the GNS3 canvas (e.g. ':/symbols/computer.svg'). GNS3 assigns a default if unset. See GET /v2/symbols on your GNS3 server for the full list of available symbol IDs.",
 			},
 		},
 	}
+}
+
+// buildEnvString converts a Terraform map into GNS3's expected comma-separated
+// "KEY=VALUE,KEY2=VALUE2" string. Keys are sorted so the result is deterministic
+// and doesn't cause spurious diffs due to Go's randomized map iteration order.
+func buildEnvString(envVars map[string]interface{}) string {
+	keys := make([]string, 0, len(envVars))
+	for k := range envVars {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	envList := make([]string, 0, len(keys))
+	for _, k := range keys {
+		envList = append(envList, fmt.Sprintf("%s=%s", k, envVars[k].(string)))
+	}
+	return strings.Join(envList, ",")
 }
 
 func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
@@ -121,19 +165,12 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 	x := d.Get("x").(int)
 	y := d.Get("y").(int)
 
-	// Convert environment map into a single string format (comma-separated key=value pairs)
 	var envStr *string
 	if v, ok := d.GetOk("environment"); ok {
-		envVars := v.(map[string]interface{})
-		envList := []string{}
-		for key, value := range envVars {
-			envList = append(envList, fmt.Sprintf("%s=%s", key, value.(string)))
-		}
-		envFormatted := strings.Join(envList, ",")
-		envStr = &envFormatted
+		formatted := buildEnvString(v.(map[string]interface{}))
+		envStr = &formatted
 	}
 
-	// Retrieve extra volumes if provided
 	var extraVolumes []string
 	if v, ok := d.GetOk("extra_volumes"); ok {
 		for _, vol := range v.([]interface{}) {
@@ -141,36 +178,40 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	// Retrieve optional start_command
 	var startCommand *string
 	if v, ok := d.GetOk("start_command"); ok {
 		cmd := v.(string)
 		startCommand = &cmd
 	}
 
-	// Build the payload for the Docker node
+	consoleType := d.Get("console_type").(string)
+	consoleVal, consoleOk := d.GetOk("console")
+	symbol := d.Get("symbol").(string)
+
 	dockerNode := DockerNode{
-		Name:      name,
-		NodeType:  "docker",
-		ComputeID: computeID,
-		X:         x,
-		Y:         y,
+		Name:        name,
+		NodeType:    "docker",
+		ComputeID:   computeID,
+		ConsoleType: consoleType,
+		Symbol:      symbol,
+		X:           x,
+		Y:           y,
 		Properties: DockerProperties{
 			Image:        image,
 			Environment:  envStr,
-			ConsoleType:  "none",
 			ExtraVolumes: extraVolumes,
 			StartCommand: startCommand,
 		},
 	}
+	if consoleOk {
+		dockerNode.Console = consoleVal.(int)
+	}
 
-	// Marshal the request
 	data, err := json.Marshal(dockerNode)
 	if err != nil {
 		return fmt.Errorf("failed to marshal docker node data: %s", err)
 	}
 
-	// Create node via API
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 	if err != nil {
@@ -185,12 +226,11 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	body, _ := ioutil.ReadAll(resp.Body)
+	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("failed to create Docker node, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse created response
 	var createdDocker DockerNode
 	if err := json.Unmarshal(body, &createdDocker); err != nil {
 		return fmt.Errorf("failed to decode Docker node response: %s", err)
@@ -200,30 +240,18 @@ func resourceGns3DockerCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Save ID
 	d.SetId(createdDocker.NodeID)
-	d.Set("docker_id", createdDocker.NodeID)
+	if err := d.Set("docker_id", createdDocker.NodeID); err != nil {
+		return err
+	}
 
-	// Optionally start the container
 	if d.Get("start").(bool) {
-		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", host, projectID, createdDocker.NodeID)
-		startReq, err := http.NewRequest("POST", startURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to build start request: %s", err)
-		}
-		startResp, err := client.Do(startReq)
-		if err != nil {
-			return fmt.Errorf("failed to start docker node: %s", err)
-		}
-		defer startResp.Body.Close()
-
-		if startResp.StatusCode != http.StatusOK {
-			startBody, _ := ioutil.ReadAll(startResp.Body)
-			return fmt.Errorf("failed to start docker node, status code: %d, response: %s", startResp.StatusCode, string(startBody))
+		if err := setDockerRunning(client, host, projectID, createdDocker.NodeID, true); err != nil {
+			return err
 		}
 	}
 
-	return nil
+	return resourceGns3DockerRead(d, meta)
 }
 
 func resourceGns3DockerRead(d *schema.ResourceData, meta interface{}) error {
@@ -245,10 +273,64 @@ func resourceGns3DockerRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to read Docker node, status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to read Docker node, status code: %d, body: %s", resp.StatusCode, body)
 	}
 
-	// Optionally, you can decode the response to update state further.
+	var node DockerNode
+	if err := json.NewDecoder(resp.Body).Decode(&node); err != nil {
+		return fmt.Errorf("failed to decode Docker node response: %s", err)
+	}
+
+	if err := d.Set("name", node.Name); err != nil {
+		return err
+	}
+	if err := d.Set("compute_id", node.ComputeID); err != nil {
+		return err
+	}
+	if err := d.Set("x", node.X); err != nil {
+		return err
+	}
+	if err := d.Set("y", node.Y); err != nil {
+		return err
+	}
+	if err := d.Set("console", node.Console); err != nil {
+		return err
+	}
+	if node.ConsoleType != "" {
+		if err := d.Set("console_type", node.ConsoleType); err != nil {
+			return err
+		}
+	}
+	if node.Symbol != "" {
+		if err := d.Set("symbol", node.Symbol); err != nil {
+			return err
+		}
+	}
+	if err := d.Set("docker_id", node.NodeID); err != nil {
+		return err
+	}
+	if node.Properties.Image != "" {
+		if err := d.Set("image", node.Properties.Image); err != nil {
+			return err
+		}
+	}
+	if err := d.Set("extra_volumes", node.Properties.ExtraVolumes); err != nil {
+		return err
+	}
+	if node.Properties.StartCommand != nil {
+		if err := d.Set("start_command", *node.Properties.StartCommand); err != nil {
+			return err
+		}
+	}
+	if err := d.Set("start", node.Status == "started"); err != nil {
+		return err
+	}
+	// Note: "environment" is intentionally not synced back here. GNS3 returns
+	// it as a single formatted string on read, not as a map, so round-tripping
+	// it through d.Set would require re-parsing — left as a follow-up if
+	// drift detection on environment vars specifically becomes a priority.
+
 	return nil
 }
 
@@ -258,48 +340,119 @@ func resourceGns3DockerUpdate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	// Build the updated payload.
-	updateData := make(map[string]interface{})
+	updateData := map[string]interface{}{}
+	properties := map[string]interface{}{}
+	hasPropertyChange := false
+
+	if d.HasChange("name") {
+		updateData["name"] = d.Get("name").(string)
+	}
+	if d.HasChange("compute_id") {
+		updateData["compute_id"] = d.Get("compute_id").(string)
+	}
+	if d.HasChange("x") {
+		updateData["x"] = d.Get("x").(int)
+	}
+	if d.HasChange("y") {
+		updateData["y"] = d.Get("y").(int)
+	}
+	if d.HasChange("console") {
+		if v, ok := d.GetOk("console"); ok {
+			updateData["console"] = v.(int)
+		}
+	}
+	if d.HasChange("console_type") {
+		updateData["console_type"] = d.Get("console_type").(string)
+	}
+	if d.HasChange("symbol") {
+		updateData["symbol"] = d.Get("symbol").(string)
+	}
+
 	if d.HasChange("environment") {
 		envVars := d.Get("environment").(map[string]interface{})
-		envList := []string{}
-		for key, value := range envVars {
-			envList = append(envList, fmt.Sprintf("%s=%s", key, value.(string)))
+		properties["environment"] = buildEnvString(envVars)
+		hasPropertyChange = true
+	}
+	if d.HasChange("extra_volumes") {
+		var extraVolumes []string
+		if v, ok := d.GetOk("extra_volumes"); ok {
+			for _, vol := range v.([]interface{}) {
+				extraVolumes = append(extraVolumes, vol.(string))
+			}
 		}
-		envFormatted := strings.Join(envList, ",")
-		updateData["environment"] = envFormatted
-	}
-	// Note: Image is ForceNew so we do not update it.
-	// Also, extra_volumes, x, and y are typically not updated dynamically, but you could add them if needed.
-
-	data, err := json.Marshal(updateData)
-	if err != nil {
-		return fmt.Errorf("failed to marshal update data: %s", err)
-	}
-
-	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
-	if err != nil {
-		return fmt.Errorf("failed to create update request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update Docker node: %s", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
-		return fmt.Errorf("failed to update Docker node, status code: %d, response: %s", resp.StatusCode, string(body))
+		properties["extra_volumes"] = extraVolumes
+		hasPropertyChange = true
 	}
 	if d.HasChange("start_command") {
-		updateData["start_command"] = d.Get("start_command").(string)
+		properties["start_command"] = d.Get("start_command").(string)
+		hasPropertyChange = true
+	}
+
+	if hasPropertyChange {
+		updateData["properties"] = properties
+	}
+
+	if len(updateData) > 0 {
+		data, err := json.Marshal(updateData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal update data: %s", err)
+		}
+
+		url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
+		req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
+		if err != nil {
+			return fmt.Errorf("failed to create update request: %s", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("failed to update Docker node: %s", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("failed to update Docker node, status code: %d, response: %s", resp.StatusCode, string(body))
+		}
+	}
+
+	if d.HasChange("start") {
+		client := &http.Client{}
+		if err := setDockerRunning(client, host, projectID, nodeID, d.Get("start").(bool)); err != nil {
+			return err
+		}
 	}
 
 	return resourceGns3DockerRead(d, meta)
+}
+
+// setDockerRunning starts or stops a Docker node via GNS3's node lifecycle endpoints.
+func setDockerRunning(client *http.Client, host, projectID, nodeID string, running bool) error {
+	action := "stop"
+	if running {
+		action = "start"
+	}
+
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/%s", host, projectID, nodeID, action)
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to build %s request: %s", action, err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to %s docker node: %s", action, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to %s docker node, status code: %d, response: %s", action, resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 func resourceGns3DockerDelete(d *schema.ResourceData, meta interface{}) error {
@@ -320,9 +473,15 @@ func resourceGns3DockerDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete docker node, status code: %d, response: %s", resp.StatusCode, string(body))
+	}
+
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3DockerImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

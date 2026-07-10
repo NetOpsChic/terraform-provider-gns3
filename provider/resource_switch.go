@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 
@@ -20,6 +20,7 @@ type Switch struct {
 	NodeID    string `json:"node_id,omitempty"`
 	X         int    `json:"x,omitempty"`
 	Y         int    `json:"y,omitempty"`
+	Symbol    string `json:"symbol,omitempty"`
 }
 
 // resourceGns3Switch defines the Terraform resource schema for GNS3 switch nodes.
@@ -50,12 +51,12 @@ func resourceGns3Switch() *schema.Resource {
 				Default:     "local",
 				Description: "Compute ID where the switch node is running.",
 			},
-			"x": { // ✅ Added X coordinate support
+			"x": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "X position of the switch node in GNS3 GUI.",
 			},
-			"y": { // ✅ Added Y coordinate support
+			"y": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "Y position of the switch node in GNS3 GUI.",
@@ -64,6 +65,12 @@ func resourceGns3Switch() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The switch node's ID assigned by GNS3.",
+			},
+			"symbol": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
+				Description: "Icon/symbol for the node on the GNS3 canvas (e.g. ':/symbols/computer.svg'). GNS3 assigns a default if unset. See GET /v2/symbols on your GNS3 server for the full list of available symbol IDs.",
 			},
 		},
 	}
@@ -75,16 +82,17 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
-	x := d.Get("x").(int) // ✅ Retrieve X coordinate
-	y := d.Get("y").(int) // ✅ Retrieve Y coordinate
+	x := d.Get("x").(int)
+	y := d.Get("y").(int)
+	symbol := d.Get("symbol").(string)
 
-	// Build the payload with X and Y coordinates
 	sw := Switch{
 		Name:      name,
 		NodeType:  "ethernet_switch",
 		ComputeID: computeID,
 		X:         x,
 		Y:         y,
+		Symbol:    symbol,
 	}
 
 	data, err := json.Marshal(sw)
@@ -115,7 +123,9 @@ func resourceGns3SwitchCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId(createdSwitch.NodeID)
-	d.Set("switch_id", createdSwitch.NodeID)
+	if err := d.Set("switch_id", createdSwitch.NodeID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -137,11 +147,15 @@ func resourceGns3SwitchUpdate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if d.HasChange("x") {
-		updateData["x"] = d.Get("x").(int) // ✅ Update X coordinate
+		updateData["x"] = d.Get("x").(int)
 	}
 
 	if d.HasChange("y") {
-		updateData["y"] = d.Get("y").(int) // ✅ Update Y coordinate
+		updateData["y"] = d.Get("y").(int)
+	}
+
+	if d.HasChange("symbol") {
+		updateData["symbol"] = d.Get("symbol").(string)
 	}
 
 	if len(updateData) == 0 {
@@ -168,7 +182,7 @@ func resourceGns3SwitchUpdate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to update switch node, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -195,11 +209,34 @@ func resourceGns3SwitchRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to read switch node, status code: %d, body: %s", resp.StatusCode, body)
 	}
 
-	// Optional: parse attributes and update d.Set(...)
+	var sw Switch
+	if err := json.NewDecoder(resp.Body).Decode(&sw); err != nil {
+		return fmt.Errorf("failed to decode switch response: %s", err)
+	}
+
+	if err := d.Set("name", sw.Name); err != nil {
+		return err
+	}
+	if err := d.Set("compute_id", sw.ComputeID); err != nil {
+		return err
+	}
+	if err := d.Set("x", sw.X); err != nil {
+		return err
+	}
+	if err := d.Set("y", sw.Y); err != nil {
+		return err
+	}
+	if err := d.Set("switch_id", sw.NodeID); err != nil {
+		return err
+	}
+	if err := d.Set("symbol", sw.Symbol); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -221,13 +258,15 @@ func resourceGns3SwitchDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
+	// Treat "already gone" as success so destroy doesn't fail on drift
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("failed to delete switch, status code: %d", resp.StatusCode)
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3SwitchImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

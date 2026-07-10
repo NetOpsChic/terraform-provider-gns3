@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 
@@ -20,6 +20,7 @@ type Nat struct {
 	NodeID    string `json:"node_id,omitempty"`
 	X         int    `json:"x,omitempty"`
 	Y         int    `json:"y,omitempty"`
+	Symbol    string `json:"symbol,omitempty"`
 }
 
 func resourceGns3Nat() *schema.Resource {
@@ -41,7 +42,8 @@ func resourceGns3Nat() *schema.Resource {
 			"name": {
 				Type:        schema.TypeString,
 				Required:    true,
-				Description: "Name of the nat node.",
+				ForceNew:    true,
+				Description: "Name of the nat node. Note: GNS3 does not support renaming NAT nodes in place via the API — changing this value will destroy and recreate the resource.",
 			},
 			"compute_id": {
 				Type:        schema.TypeString,
@@ -49,12 +51,12 @@ func resourceGns3Nat() *schema.Resource {
 				Default:     "local",
 				Description: "Compute ID where the nat node is running.",
 			},
-			"x": { // ✅ Added X coordinate support
+			"x": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "X position of the nat node in GNS3 GUI.",
 			},
-			"y": { // ✅ Added Y coordinate support
+			"y": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "Y position of the nat node in GNS3 GUI.",
@@ -63,6 +65,12 @@ func resourceGns3Nat() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The nat node's ID assigned by GNS3.",
+			},
+			"symbol": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
+				Description: "Icon/symbol for the node on the GNS3 canvas (e.g. ':/symbols/computer.svg'). GNS3 assigns a default if unset. See GET /v2/symbols on your GNS3 server for the full list of available symbol IDs.",
 			},
 		},
 	}
@@ -74,15 +82,17 @@ func resourceGns3NatCreate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
-	x := d.Get("x").(int) // ✅ Retrieve X coordinate
-	y := d.Get("y").(int) // ✅ Retrieve Y coordinate
+	x := d.Get("x").(int)
+	y := d.Get("y").(int)
+	symbol := d.Get("symbol").(string)
 
 	nat := Nat{
 		Name:      name,
 		NodeType:  "nat",
 		ComputeID: computeID,
-		X:         x, // ✅ Add X coordinate to request
-		Y:         y, // ✅ Add Y coordinate to request
+		X:         x,
+		Y:         y,
+		Symbol:    symbol,
 	}
 
 	data, err := json.Marshal(nat)
@@ -113,7 +123,9 @@ func resourceGns3NatCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId(createdNat.NodeID)
-	d.Set("nat_id", createdNat.NodeID)
+	if err := d.Set("nat_id", createdNat.NodeID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -126,20 +138,23 @@ func resourceGns3NatUpdate(d *schema.ResourceData, meta interface{}) error {
 
 	updateData := map[string]interface{}{}
 
-	if d.HasChange("name") {
-		updateData["name"] = d.Get("name").(string)
-	}
+	// Note: "name" is ForceNew — GNS3 silently ignores rename requests for
+	// nat nodes, so Terraform recreates the resource instead of calling Update.
 
 	if d.HasChange("compute_id") {
 		updateData["compute_id"] = d.Get("compute_id").(string)
 	}
 
 	if d.HasChange("x") {
-		updateData["x"] = d.Get("x").(int) // ✅ Update X coordinate
+		updateData["x"] = d.Get("x").(int)
 	}
 
 	if d.HasChange("y") {
-		updateData["y"] = d.Get("y").(int) // ✅ Update Y coordinate
+		updateData["y"] = d.Get("y").(int)
+	}
+
+	if d.HasChange("symbol") {
+		updateData["symbol"] = d.Get("symbol").(string)
 	}
 
 	if len(updateData) == 0 {
@@ -166,7 +181,7 @@ func resourceGns3NatUpdate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to update nat node, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -191,10 +206,33 @@ func resourceGns3NatRead(d *schema.ResourceData, meta interface{}) error {
 		d.SetId("")
 		return nil
 	}
-
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("unexpected read status %d: %s", resp.StatusCode, body)
+	}
+
+	var nat Nat
+	if err := json.NewDecoder(resp.Body).Decode(&nat); err != nil {
+		return fmt.Errorf("failed to decode nat node response: %s", err)
+	}
+
+	if err := d.Set("name", nat.Name); err != nil {
+		return err
+	}
+	if err := d.Set("compute_id", nat.ComputeID); err != nil {
+		return err
+	}
+	if err := d.Set("x", nat.X); err != nil {
+		return err
+	}
+	if err := d.Set("y", nat.Y); err != nil {
+		return err
+	}
+	if err := d.Set("nat_id", nat.NodeID); err != nil {
+		return err
+	}
+	if err := d.Set("symbol", nat.Symbol); err != nil {
+		return err
 	}
 
 	return nil
@@ -218,13 +256,15 @@ func resourceGns3NatDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
+	// Treat "already gone" as success so destroy doesn't fail on drift
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("failed to delete nat node, status code: %d", resp.StatusCode)
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3NatImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

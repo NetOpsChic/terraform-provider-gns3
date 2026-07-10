@@ -5,14 +5,28 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
+var templateHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 // resourceGns3Template defines the Terraform resource schema for GNS3 templates.
+//
+// Note on Update reliability: this resource instantiates a node from a
+// GNS3 template, and the resulting node's type (qemu, dynamips, docker,
+// nat, etc.) depends entirely on which template was used — it is not fixed
+// like the other resources in this provider. We've confirmed elsewhere that
+// GNS3 silently ignores rename requests for "nat" type nodes specifically
+// (see GNS3/gns3-server#2811) while renames work fine for switch/cloud/qemu.
+// If a template instantiates a nat-type node, changing "name" here may hit
+// the same silent-no-op behavior. Read is fully synced (see below) so that,
+// even if this happens, `terraform plan` will correctly show the persisting
+// drift rather than silently believing the rename succeeded.
 func resourceGns3Template() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3TemplateCreate,
@@ -34,8 +48,9 @@ func resourceGns3Template() *schema.Resource {
 				ForceNew: true, // Ensures deletion & recreation if template_id changes
 			},
 			"name": {
-				Type:     schema.TypeString,
-				Required: true,
+				Type:        schema.TypeString,
+				Required:    true,
+				Description: "Name of the node created from the template. Note: if the template instantiates a NAT-type node, GNS3 may silently ignore rename requests — see GNS3/gns3-server#2811.",
 			},
 			"compute_id": {
 				Type:     schema.TypeString,
@@ -71,7 +86,6 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 	x := d.Get("x").(int)
 	y := d.Get("y").(int)
 
-	// Create template request payload
 	templateData := map[string]interface{}{
 		"name":       templateName,
 		"compute_id": computeID,
@@ -84,18 +98,18 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 		return fmt.Errorf("error marshaling JSON: %s", err)
 	}
 
-	// Send the request to create the template
-	resp, err := http.Post(fmt.Sprintf("%s/v2/projects/%s/templates/%s", host, projectID, templateID), "application/json", bytes.NewBuffer(nodeBody))
+	url := fmt.Sprintf("%s/v2/projects/%s/templates/%s", host, projectID, templateID)
+	resp, err := templateHTTPClient.Post(url, "application/json", bytes.NewBuffer(nodeBody))
 	if err != nil {
 		return fmt.Errorf("error creating GNS3 template: %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated {
-		return fmt.Errorf("failed to create GNS3 template, status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to create GNS3 template, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Parse the response to retrieve the node_id (template ID)
 	var createdTemplate map[string]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&createdTemplate); err != nil {
 		return fmt.Errorf("error decoding GNS3 API response: %s", err)
@@ -105,23 +119,22 @@ func resourceGns3TemplateCreate(d *schema.ResourceData, meta interface{}) error 
 		return fmt.Errorf("failed to retrieve node_id from GNS3 API response")
 	}
 
-	// Set the resource ID in Terraform
 	d.SetId(templateNodeID)
 
-	// Check if the "start" attribute is true and start the node if so.
 	if d.Get("start").(bool) {
 		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", host, projectID, templateNodeID)
-		startResp, err := http.Post(startURL, "application/json", nil)
+		startResp, err := templateHTTPClient.Post(startURL, "application/json", nil)
 		if err != nil {
 			return fmt.Errorf("error starting node: %s", err)
 		}
 		defer startResp.Body.Close()
 		if startResp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to start node, status code: %d", startResp.StatusCode)
+			body, _ := io.ReadAll(startResp.Body)
+			return fmt.Errorf("failed to start node, status code: %d, response: %s", startResp.StatusCode, string(body))
 		}
 	}
 
-	return nil
+	return resourceGns3TemplateRead(d, meta)
 }
 
 func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
@@ -131,7 +144,7 @@ func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
 	nodeID := d.Id()
 
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, nodeID)
-	resp, err := http.Get(url)
+	resp, err := templateHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("error reading GNS3 node (template): %s", err)
 	}
@@ -143,8 +156,39 @@ func resourceGns3TemplateRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to read template node, status code: %d, response: %s", resp.StatusCode, string(body))
+	}
+
+	var node map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&node); err != nil {
+		return fmt.Errorf("failed to decode template node response: %s", err)
+	}
+
+	if v, ok := node["name"].(string); ok {
+		if err := d.Set("name", v); err != nil {
+			return err
+		}
+	}
+	if v, ok := node["compute_id"].(string); ok {
+		if err := d.Set("compute_id", v); err != nil {
+			return err
+		}
+	}
+	if v, ok := node["x"].(float64); ok {
+		if err := d.Set("x", int(v)); err != nil {
+			return err
+		}
+	}
+	if v, ok := node["y"].(float64); ok {
+		if err := d.Set("y", int(v)); err != nil {
+			return err
+		}
+	}
+	if v, ok := node["status"].(string); ok {
+		if err := d.Set("start", v == "started"); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -156,7 +200,6 @@ func resourceGns3TemplateUpdate(d *schema.ResourceData, meta interface{}) error 
 	projectID := d.Get("project_id").(string)
 	templateID := d.Id()
 
-	// Build the update payload with the updated attributes.
 	updateData := map[string]interface{}{
 		"name":       d.Get("name").(string),
 		"compute_id": d.Get("compute_id").(string),
@@ -169,7 +212,6 @@ func resourceGns3TemplateUpdate(d *schema.ResourceData, meta interface{}) error 
 		return fmt.Errorf("failed to marshal update data: %s", err)
 	}
 
-	// Send a PUT request to update the template.
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", host, projectID, templateID)
 	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(data))
 	if err != nil {
@@ -177,18 +219,43 @@ func resourceGns3TemplateUpdate(d *schema.ResourceData, meta interface{}) error 
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := templateHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to update template: %s", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to update template, status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to update template, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Optionally, re-read the resource to update state.
+	// Handle "start" toggle separately — it's a lifecycle action, not a
+	// property the generic node PUT endpoint controls.
+	if d.HasChange("start") {
+		action := "stop"
+		if d.Get("start").(bool) {
+			action = "start"
+		}
+		actionURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/%s", host, projectID, templateID, action)
+		actionReq, err := http.NewRequest("POST", actionURL, nil)
+		if err != nil {
+			return fmt.Errorf("failed to create %s request: %s", action, err)
+		}
+		actionResp, err := templateHTTPClient.Do(actionReq)
+		if err != nil {
+			return fmt.Errorf("failed to %s node: %s", action, err)
+		}
+		defer actionResp.Body.Close()
+		if actionResp.StatusCode != http.StatusOK && actionResp.StatusCode != http.StatusConflict {
+			body, _ := io.ReadAll(actionResp.Body)
+			return fmt.Errorf("failed to %s node, status code: %d, response: %s", action, actionResp.StatusCode, string(body))
+		}
+	}
+
+	// Re-read to sync state — this is what would surface a silent-no-op
+	// rename (e.g. if the template instantiated a nat-type node) as
+	// persisting drift, rather than the previous stub Read hiding it.
 	return resourceGns3TemplateRead(d, meta)
 }
 
@@ -204,8 +271,7 @@ func resourceGns3TemplateDelete(d *schema.ResourceData, meta interface{}) error 
 		return fmt.Errorf("failed to create delete request for template node: %s", err)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := templateHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to delete template node: %s", err)
 	}
@@ -217,13 +283,14 @@ func resourceGns3TemplateDelete(d *schema.ResourceData, meta interface{}) error 
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to delete template node, status code: %d, body: %s", resp.StatusCode, body)
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3TemplateImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

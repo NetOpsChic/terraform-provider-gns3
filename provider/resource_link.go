@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -26,14 +26,16 @@ type Link struct {
 	Nodes  []LinkNode `json:"nodes"`
 }
 
+var linkHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 func waitForNode(host, projectID, nodeID string) error {
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes", host, projectID)
 	for i := 0; i < 10; i++ {
-		resp, err := http.Get(url)
+		resp, err := linkHTTPClient.Get(url)
 		if err != nil {
 			return fmt.Errorf("failed to query nodes: %s", err)
 		}
-		body, err := ioutil.ReadAll(resp.Body)
+		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
 			return fmt.Errorf("failed to read nodes response: %s", err)
@@ -72,32 +74,38 @@ func resourceGns3Link() *schema.Resource {
 			"node_a_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				Description: "ID of the first node. This can be a router, switch, or cloud node.",
+				ForceNew:    true,
+				Description: "ID of the first node. This can be a router, switch, or cloud node. Changing this destroys and recreates the link — GNS3 accepts PUT requests to rewire an existing link's endpoints but does not actually apply them.",
 			},
 			"node_a_adapter": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				Description: "Adapter number for the first node.",
+				ForceNew:    true,
+				Description: "Adapter number for the first node. Changing this destroys and recreates the link.",
 			},
 			"node_a_port": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				Description: "Port number for the first node.",
+				ForceNew:    true,
+				Description: "Port number for the first node. Changing this destroys and recreates the link.",
 			},
 			"node_b_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				Description: "ID of the second node. This can be a router, switch, or cloud node.",
+				ForceNew:    true,
+				Description: "ID of the second node. This can be a router, switch, or cloud node. Changing this destroys and recreates the link.",
 			},
 			"node_b_adapter": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				Description: "Adapter number for the second node.",
+				ForceNew:    true,
+				Description: "Adapter number for the second node. Changing this destroys and recreates the link.",
 			},
 			"node_b_port": {
 				Type:        schema.TypeInt,
 				Required:    true,
-				Description: "Port number for the second node.",
+				ForceNew:    true,
+				Description: "Port number for the second node. Changing this destroys and recreates the link.",
 			},
 			"link_id": {
 				Type:        schema.TypeString,
@@ -114,7 +122,6 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 
-	// Retrieve node IDs from resource data
 	nodeAID := d.Get("node_a_id").(string)
 	nodeBID := d.Get("node_b_id").(string)
 
@@ -126,7 +133,6 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("node B not found: %s", err)
 	}
 
-	// Build the link payload.
 	link := Link{
 		Nodes: []LinkNode{
 			{
@@ -148,7 +154,7 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	url := fmt.Sprintf("%s/v2/projects/%s/links", host, projectID)
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer(linkData))
+	resp, err := linkHTTPClient.Post(url, "application/json", bytes.NewBuffer(linkData))
 	if err != nil {
 		return fmt.Errorf("failed to create link: %s", err)
 	}
@@ -168,8 +174,10 @@ func resourceGns3LinkCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId(createdLink.LinkID)
-	d.Set("link_id", createdLink.LinkID)
-	return nil
+	if err := d.Set("link_id", createdLink.LinkID); err != nil {
+		return err
+	}
+	return resourceGns3LinkRead(d, meta)
 }
 
 func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
@@ -179,7 +187,7 @@ func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
 	linkID := d.Id()
 
 	url := fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID)
-	resp, err := http.Get(url)
+	resp, err := linkHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("error reading GNS3 link: %s", err)
 	}
@@ -192,63 +200,60 @@ func resourceGns3LinkRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to read link, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Optionally parse and update fields if needed
+	var link Link
+	if err := json.NewDecoder(resp.Body).Decode(&link); err != nil {
+		return fmt.Errorf("failed to decode link response: %s", err)
+	}
+
+	if len(link.Nodes) != 2 {
+		return fmt.Errorf("unexpected link response: expected 2 endpoints, got %d", len(link.Nodes))
+	}
+
+	// The API doesn't guarantee endpoint ordering matches node_a/node_b as
+	// originally specified, so match against whichever endpoint currently
+	// corresponds to node_a_id in state to decide which array slot maps to
+	// which schema field, rather than assuming index 0 is always "a".
+	currentNodeAID := d.Get("node_a_id").(string)
+	first, second := link.Nodes[0], link.Nodes[1]
+	if first.NodeID != currentNodeAID && second.NodeID == currentNodeAID {
+		first, second = second, first
+	}
+
+	if err := d.Set("node_a_id", first.NodeID); err != nil {
+		return err
+	}
+	if err := d.Set("node_a_adapter", first.AdapterNumber); err != nil {
+		return err
+	}
+	if err := d.Set("node_a_port", first.PortNumber); err != nil {
+		return err
+	}
+	if err := d.Set("node_b_id", second.NodeID); err != nil {
+		return err
+	}
+	if err := d.Set("node_b_adapter", second.AdapterNumber); err != nil {
+		return err
+	}
+	if err := d.Set("node_b_port", second.PortNumber); err != nil {
+		return err
+	}
+	if err := d.Set("link_id", link.LinkID); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-// resourceGns3LinkUpdate updates an existing link with new parameters.
+// resourceGns3LinkUpdate exists only to satisfy the schema.Resource interface.
+// Every field on this resource is ForceNew (see schema above) — GNS3 accepts
+// PUT requests to rewire an existing link's endpoints but does not actually
+// apply them, confirmed via live testing, so Terraform destroys and recreates
+// the link instead of calling this function for any real change.
 func resourceGns3LinkUpdate(d *schema.ResourceData, meta interface{}) error {
-	config := meta.(*ProviderConfig)
-	host := config.Host
-	projectID := d.Get("project_id").(string)
-	linkID := d.Id()
-
-	// Build the update payload with the updated attributes.
-	link := Link{
-		Nodes: []LinkNode{
-			{
-				NodeID:        d.Get("node_a_id").(string),
-				AdapterNumber: d.Get("node_a_adapter").(int),
-				PortNumber:    d.Get("node_a_port").(int),
-			},
-			{
-				NodeID:        d.Get("node_b_id").(string),
-				AdapterNumber: d.Get("node_b_adapter").(int),
-				PortNumber:    d.Get("node_b_port").(int),
-			},
-		},
-	}
-
-	linkData, err := json.Marshal(link)
-	if err != nil {
-		return fmt.Errorf("failed to marshal update link data: %s", err)
-	}
-
-	url := fmt.Sprintf("%s/v2/projects/%s/links/%s", host, projectID, linkID)
-	req, err := http.NewRequest("PUT", url, bytes.NewBuffer(linkData))
-	if err != nil {
-		return fmt.Errorf("failed to create update request: %s", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to update link: %s", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		var errorResponse map[string]interface{}
-		_ = json.NewDecoder(resp.Body).Decode(&errorResponse)
-		return fmt.Errorf("failed to update link, status code: %d, error: %v", resp.StatusCode, errorResponse)
-	}
-
-	// Optionally re-read the resource state.
 	return resourceGns3LinkRead(d, meta)
 }
 
@@ -264,27 +269,27 @@ func resourceGns3LinkDelete(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("error creating delete request: %s", err)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := linkHTTPClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error deleting GNS3 link: %s", err)
 	}
 	defer resp.Body.Close()
 
-	// Ignore 404 errors during delete — treat as already gone
+	// Treat "already gone" as success so destroy doesn't fail on drift
 	if resp.StatusCode == http.StatusNotFound {
 		d.SetId("")
 		return nil
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to delete GNS3 link, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3LinkImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

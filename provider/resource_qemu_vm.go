@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 
@@ -58,6 +58,7 @@ func resourceGns3Qemu() *schema.Resource {
 			"console": {
 				Type:        schema.TypeInt,
 				Optional:    true,
+				Computed:    true,
 				Description: "Console TCP port",
 			},
 			"console_type": {
@@ -81,7 +82,8 @@ func resourceGns3Qemu() *schema.Resource {
 			"mac_address": {
 				Type:        schema.TypeString,
 				Optional:    true,
-				Description: "Explicit MAC address to assign to the VM's primary network interface",
+				Computed:    true,
+				Description: "Explicit MAC address to assign to the VM's primary network interface. If unset, GNS3 assigns one automatically.",
 			},
 			"options": {
 				Type:        schema.TypeString,
@@ -92,7 +94,7 @@ func resourceGns3Qemu() *schema.Resource {
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     false,
-				Description: "If true, start the QEMU VM instance after creation",
+				Description: "Desired running state of the VM. true = should be running, false = should be stopped. Reconciled on every apply.",
 			},
 			"platform": {
 				Type:        schema.TypeString,
@@ -104,7 +106,6 @@ func resourceGns3Qemu() *schema.Resource {
 				Optional:    true,
 				Description: "Path to the HDA (bootable) disk image file for the QEMU node",
 			},
-			// NEW: optional canvas coordinates
 			"x": {
 				Type:        schema.TypeInt,
 				Optional:    true,
@@ -114,6 +115,12 @@ func resourceGns3Qemu() *schema.Resource {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "Y coordinate of the node on the GNS3 canvas",
+			},
+			"symbol": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
+				Description: "Icon/symbol for the node on the GNS3 canvas (e.g. ':/symbols/qemu_guest.svg'). GNS3 assigns a default if unset. See GET /v2/symbols on your GNS3 server for the full list of available symbol IDs.",
 			},
 		},
 	}
@@ -158,11 +165,10 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		properties["hda_disk_interface"] = "virtio"
 	}
 
-	// Controller-level API
 	payload := map[string]interface{}{
 		"name":         name,
 		"node_type":    "qemu",
-		"compute_id":   "local", // adjust if needed
+		"compute_id":   "local",
 		"console_type": consoleType,
 		"properties":   properties,
 	}
@@ -171,12 +177,14 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 		payload["console"] = consoleVal.(int)
 	}
 
-	// include x/y if explicitly set (even if zero)
 	if xv, ok := d.GetOkExists("x"); ok {
 		payload["x"] = xv.(int)
 	}
 	if yv, ok := d.GetOkExists("y"); ok {
 		payload["y"] = yv.(int)
+	}
+	if sv, ok := d.GetOk("symbol"); ok {
+		payload["symbol"] = sv.(string)
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -192,7 +200,7 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("controller rejected QEMU node creation, status: %d, response: %s", resp.StatusCode, string(body))
 	}
 
@@ -207,21 +215,12 @@ func resourceGns3QemuCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 	d.SetId(nodeID)
 
-	// Start VM if requested
+	// Reconcile desired running state (start_vm is the source of truth, not
+	// "whatever GNS3 happened to do on create" — a freshly created node is
+	// stopped by default, so we only need to act when start_vm is true).
 	if d.Get("start_vm").(bool) {
-		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", config.Host, projectID, nodeID)
-		req, err := http.NewRequest("POST", startURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create start request: %s", err)
-		}
-		startResp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to start QEMU node: %s", err)
-		}
-		defer startResp.Body.Close()
-		if startResp.StatusCode != http.StatusOK {
-			body, _ := ioutil.ReadAll(startResp.Body)
-			return fmt.Errorf("failed to start node, status: %d, response: %s", startResp.StatusCode, string(body))
+		if err := setQemuRunning(http.DefaultClient, config.Host, projectID, nodeID, true); err != nil {
+			return err
 		}
 	}
 
@@ -233,7 +232,6 @@ func resourceGns3QemuRead(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	// Use the controller's project/node endpoint, not the compute API path
 	apiURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", config.Host, projectID, nodeID)
 	resp, err := http.Get(apiURL)
 	if err != nil {
@@ -245,7 +243,7 @@ func resourceGns3QemuRead(d *schema.ResourceData, meta interface{}) error {
 		d.SetId("")
 		return nil
 	} else if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to read QEMU node, status: %d, response: %s", resp.StatusCode, body)
 	}
 
@@ -254,26 +252,100 @@ func resourceGns3QemuRead(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to decode node details: %s", err)
 	}
 
-	d.Set("name", node["name"])
-
-	// hydrate x/y if present
-	if xv, ok := node["x"]; ok {
-		switch t := xv.(type) {
-		case float64:
-			_ = d.Set("x", int(t))
-		case int:
-			_ = d.Set("x", t)
-		}
-	}
-	if yv, ok := node["y"]; ok {
-		switch t := yv.(type) {
-		case float64:
-			_ = d.Set("y", int(t))
-		case int:
-			_ = d.Set("y", t)
-		}
+	if err := d.Set("name", node["name"]); err != nil {
+		return err
 	}
 
+	if err := setIntField(d, "x", node["x"]); err != nil {
+		return err
+	}
+	if err := setIntField(d, "y", node["y"]); err != nil {
+		return err
+	}
+	if err := setIntField(d, "console", node["console"]); err != nil {
+		return err
+	}
+
+	if v, ok := node["console_type"].(string); ok && v != "" {
+		if err := d.Set("console_type", v); err != nil {
+			return err
+		}
+	}
+	if v, ok := node["symbol"].(string); ok && v != "" {
+		if err := d.Set("symbol", v); err != nil {
+			return err
+		}
+	}
+
+	if status, ok := node["status"].(string); ok {
+		if err := d.Set("start_vm", status == "started"); err != nil {
+			return err
+		}
+	}
+
+	props, _ := node["properties"].(map[string]interface{})
+	if props != nil {
+		if err := setStringField(d, "adapter_type", props["adapter_type"]); err != nil {
+			return err
+		}
+		if err := setIntField(d, "adapters", props["adapters"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "bios_image", props["bios_image"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "cdrom_image", props["cdrom_image"]); err != nil {
+			return err
+		}
+		if err := setIntField(d, "cpus", props["cpus"]); err != nil {
+			return err
+		}
+		if err := setIntField(d, "ram", props["ram"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "mac_address", props["mac_address"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "options", props["options"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "platform", props["platform"]); err != nil {
+			return err
+		}
+		if err := setStringField(d, "hda_disk_image", props["hda_disk_image"]); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// setIntField sets an int-typed schema field from a decoded JSON value, which
+// arrives as float64 (or occasionally int) since encoding/json decodes numbers
+// into interface{} as float64 by default. Ignores nil/missing values so we
+// don't stomp defaults with zero when the API omits a field.
+func setIntField(d *schema.ResourceData, key string, raw interface{}) error {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case float64:
+		return d.Set(key, int(v))
+	case int:
+		return d.Set(key, v)
+	}
+	return nil
+}
+
+// setStringField sets a string-typed schema field from a decoded JSON value,
+// skipping nil so empty/unset properties don't overwrite existing state.
+func setStringField(d *schema.ResourceData, key string, raw interface{}) error {
+	if raw == nil {
+		return nil
+	}
+	if v, ok := raw.(string); ok {
+		return d.Set(key, v)
+	}
 	return nil
 }
 
@@ -282,7 +354,6 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	// If nothing changed, just refresh state
 	if !(d.HasChange("name") ||
 		d.HasChange("adapter_type") ||
 		d.HasChange("adapters") ||
@@ -298,9 +369,12 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		d.HasChange("hda_disk_image") ||
 		d.HasChange("start_vm") ||
 		d.HasChange("x") ||
-		d.HasChange("y")) {
+		d.HasChange("y") ||
+		d.HasChange("symbol")) {
 		return resourceGns3QemuRead(d, meta)
 	}
+
+	client := &http.Client{}
 
 	// 1) GET live node to merge properties & check status
 	getURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", config.Host, projectID, nodeID)
@@ -311,12 +385,11 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		// Node missing -> mark gone so TF can recreate
 		d.SetId("")
 		return nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to read QEMU node (pre-update), status: %d, response: %s", resp.StatusCode, string(body))
 	}
 
@@ -325,33 +398,22 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to decode node (pre-update): %s", err)
 	}
 
-	// extract properties map safely
 	props := map[string]interface{}{}
 	if p, ok := node["properties"].(map[string]interface{}); ok && p != nil {
 		props = p
 	}
 
-	// 2) Stop if running (some props require stop)
+	// 2) Stop if currently running — some properties require a stopped VM to change.
 	wasRunning := false
 	if s, ok := node["status"].(string); ok && s == "started" {
 		wasRunning = true
-		stopURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/stop", config.Host, projectID, nodeID)
-		req, err := http.NewRequest("POST", stopURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create stop request: %s", err)
-		}
-		stopResp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to stop QEMU node: %s", err)
-		}
-		defer stopResp.Body.Close()
-		if stopResp.StatusCode != http.StatusOK && stopResp.StatusCode != http.StatusConflict {
-			body, _ := ioutil.ReadAll(stopResp.Body)
-			return fmt.Errorf("failed to stop node, status: %d, response: %s", stopResp.StatusCode, string(body))
+		if err := setQemuRunning(client, config.Host, projectID, nodeID, false); err != nil {
+			return err
 		}
 	}
+	_ = wasRunning // retained for clarity/logging; final state is driven by start_vm below, not wasRunning
 
-	// 3) Overlay changed fields into properties (top-level handled separately)
+	// 3) Overlay changed fields into properties
 	if d.HasChange("adapter_type") {
 		props["adapter_type"] = d.Get("adapter_type").(string)
 	}
@@ -401,7 +463,7 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	// 4) Build PUT payload (top-level name/x/y + properties)
+	// 4) Build PUT payload (top-level name/console/x/y + properties)
 	putPayload := map[string]interface{}{
 		"properties": props,
 	}
@@ -426,6 +488,11 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 			putPayload["y"] = yv.(int)
 		}
 	}
+	if d.HasChange("symbol") {
+		if sv, ok := d.GetOk("symbol"); ok {
+			putPayload["symbol"] = sv.(string)
+		}
+	}
 
 	// 5) PUT update
 	data, err := json.Marshal(putPayload)
@@ -439,36 +506,52 @@ func resourceGns3QemuUpdate(d *schema.ResourceData, meta interface{}) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	putResp, err := http.DefaultClient.Do(req)
+	putResp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to update QEMU node: %s", err)
 	}
 	defer putResp.Body.Close()
 	if putResp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(putResp.Body)
+		body, _ := io.ReadAll(putResp.Body)
 		return fmt.Errorf("update QEMU node failed, status: %d, response: %s", putResp.StatusCode, string(body))
 	}
 
-	// 6) Start again if it was running, or if desired state requests it
-	if wasRunning || d.Get("start_vm").(bool) {
-		startURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/start", config.Host, projectID, nodeID)
-		req, err := http.NewRequest("POST", startURL, nil)
-		if err != nil {
-			return fmt.Errorf("failed to create start request: %s", err)
-		}
-		startResp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			return fmt.Errorf("failed to start QEMU node: %s", err)
-		}
-		defer startResp.Body.Close()
-		if startResp.StatusCode != http.StatusOK {
-			body, _ := ioutil.ReadAll(startResp.Body)
-			return fmt.Errorf("failed to start node, status: %d, response: %s", startResp.StatusCode, string(body))
-		}
+	// 6) Reconcile running state to match the DESIRED state (start_vm), not
+	// whatever it happened to be running before the update. This is the fix:
+	// previously "wasRunning || start_vm" meant a node the user wanted to stop
+	// (start_vm = false) would get silently restarted if it had been running.
+	if err := setQemuRunning(client, config.Host, projectID, nodeID, d.Get("start_vm").(bool)); err != nil {
+		return err
 	}
 
 	// 7) Re-read to sync state
 	return resourceGns3QemuRead(d, meta)
+}
+
+// setQemuRunning starts or stops a QEMU node via GNS3's node lifecycle endpoints.
+// Treats "already in desired state" conflicts (409) as success rather than an error.
+func setQemuRunning(client *http.Client, host, projectID, nodeID string, running bool) error {
+	action := "stop"
+	if running {
+		action = "start"
+	}
+
+	url := fmt.Sprintf("%s/v2/projects/%s/nodes/%s/%s", host, projectID, nodeID, action)
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create %s request: %s", action, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to %s QEMU node: %s", action, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to %s node, status: %d, response: %s", action, resp.StatusCode, string(body))
+	}
+	return nil
 }
 
 func resourceGns3QemuDelete(d *schema.ResourceData, meta interface{}) error {
@@ -476,7 +559,6 @@ func resourceGns3QemuDelete(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	nodeID := d.Id()
 
-	// Use the controller's project/node endpoint for delete as well
 	apiURL := fmt.Sprintf("%s/v2/projects/%s/nodes/%s", config.Host, projectID, nodeID)
 	req, err := http.NewRequest("DELETE", apiURL, nil)
 	if err != nil {
@@ -490,8 +572,8 @@ func resourceGns3QemuDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to delete QEMU node, status: %d, response: %s", resp.StatusCode, body)
 	}
 	d.SetId("")
@@ -523,11 +605,9 @@ func resourceQemuImporter(
 		)
 	}
 
-	// seed the required attribute:
 	if err := d.Set("project_id", projectID); err != nil {
 		return nil, err
 	}
-	// Terraform resource ID must be the node ID:
 	d.SetId(nodeID)
 
 	return []*schema.ResourceData{d}, nil

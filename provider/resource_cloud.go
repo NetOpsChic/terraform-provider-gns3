@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 
@@ -20,6 +20,7 @@ type Cloud struct {
 	NodeID    string `json:"node_id,omitempty"`
 	X         int    `json:"x,omitempty"`
 	Y         int    `json:"y,omitempty"`
+	Symbol    string `json:"symbol,omitempty"`
 }
 
 func resourceGns3Cloud() *schema.Resource {
@@ -49,12 +50,12 @@ func resourceGns3Cloud() *schema.Resource {
 				Default:     "local",
 				Description: "Compute ID where the cloud node is running.",
 			},
-			"x": { // ✅ Added X coordinate support
+			"x": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "X position of the cloud node in GNS3 GUI.",
 			},
-			"y": { // ✅ Added Y coordinate support
+			"y": {
 				Type:        schema.TypeInt,
 				Optional:    true,
 				Description: "Y position of the cloud node in GNS3 GUI.",
@@ -63,6 +64,12 @@ func resourceGns3Cloud() *schema.Resource {
 				Type:        schema.TypeString,
 				Computed:    true,
 				Description: "The cloud node's ID assigned by GNS3.",
+			},
+			"symbol": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
+				Description: "Icon/symbol for the node on the GNS3 canvas (e.g. ':/symbols/computer.svg'). GNS3 assigns a default if unset. See GET /v2/symbols on your GNS3 server for the full list of available symbol IDs.",
 			},
 		},
 	}
@@ -74,15 +81,17 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 	projectID := d.Get("project_id").(string)
 	name := d.Get("name").(string)
 	computeID := d.Get("compute_id").(string)
-	x := d.Get("x").(int) // ✅ Retrieve X coordinate
-	y := d.Get("y").(int) // ✅ Retrieve Y coordinate
+	x := d.Get("x").(int)
+	y := d.Get("y").(int)
+	symbol := d.Get("symbol").(string)
 
 	cloud := Cloud{
 		Name:      name,
 		NodeType:  "cloud",
 		ComputeID: computeID,
-		X:         x, // ✅ Add X coordinate to request
-		Y:         y, // ✅ Add Y coordinate to request
+		X:         x,
+		Y:         y,
+		Symbol:    symbol,
 	}
 
 	data, err := json.Marshal(cloud)
@@ -113,7 +122,9 @@ func resourceGns3CloudCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId(createdCloud.NodeID)
-	d.Set("cloud_id", createdCloud.NodeID)
+	if err := d.Set("cloud_id", createdCloud.NodeID); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -135,11 +146,15 @@ func resourceGns3CloudUpdate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if d.HasChange("x") {
-		updateData["x"] = d.Get("x").(int) // ✅ Update X coordinate
+		updateData["x"] = d.Get("x").(int)
 	}
 
 	if d.HasChange("y") {
-		updateData["y"] = d.Get("y").(int) // ✅ Update Y coordinate
+		updateData["y"] = d.Get("y").(int)
+	}
+
+	if d.HasChange("symbol") {
+		updateData["symbol"] = d.Get("symbol").(string)
 	}
 
 	if len(updateData) == 0 {
@@ -166,7 +181,7 @@ func resourceGns3CloudUpdate(d *schema.ResourceData, meta interface{}) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := ioutil.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("failed to update cloud node, status code: %d, response: %s", resp.StatusCode, string(bodyBytes))
 	}
 
@@ -193,8 +208,32 @@ func resourceGns3CloudRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("unexpected read status %d: %s", resp.StatusCode, body)
+	}
+
+	var cloud Cloud
+	if err := json.NewDecoder(resp.Body).Decode(&cloud); err != nil {
+		return fmt.Errorf("failed to decode cloud node response: %s", err)
+	}
+
+	if err := d.Set("name", cloud.Name); err != nil {
+		return err
+	}
+	if err := d.Set("compute_id", cloud.ComputeID); err != nil {
+		return err
+	}
+	if err := d.Set("x", cloud.X); err != nil {
+		return err
+	}
+	if err := d.Set("y", cloud.Y); err != nil {
+		return err
+	}
+	if err := d.Set("cloud_id", cloud.NodeID); err != nil {
+		return err
+	}
+	if err := d.Set("symbol", cloud.Symbol); err != nil {
+		return err
 	}
 
 	return nil
@@ -218,13 +257,15 @@ func resourceGns3CloudDelete(d *schema.ResourceData, meta interface{}) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusNoContent {
+	// Treat "already gone" as success so destroy doesn't fail on drift
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("failed to delete cloud node, status code: %d", resp.StatusCode)
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3CloudImporter(
 	ctx context.Context,
 	d *schema.ResourceData,

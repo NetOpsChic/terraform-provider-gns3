@@ -5,8 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
@@ -16,6 +17,8 @@ type Project struct {
 	Name      string `json:"name"`
 	ProjectID string `json:"project_id,omitempty"`
 }
+
+var projectHTTPClient = &http.Client{Timeout: 15 * time.Second}
 
 // resourceGns3Project defines the Terraform resource schema for GNS3 projects.
 func resourceGns3Project() *schema.Resource {
@@ -55,14 +58,14 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to marshal project: %w", err)
 	}
 
-	controllerResp, err := http.Post(fmt.Sprintf("%s/v2/projects", host), "application/json", bytes.NewBuffer(projectData))
+	controllerResp, err := projectHTTPClient.Post(fmt.Sprintf("%s/v2/projects", host), "application/json", bytes.NewBuffer(projectData))
 	if err != nil {
 		return fmt.Errorf("controller POST failed: %w", err)
 	}
 	defer controllerResp.Body.Close()
 
 	if controllerResp.StatusCode != http.StatusCreated {
-		body, _ := ioutil.ReadAll(controllerResp.Body)
+		body, _ := io.ReadAll(controllerResp.Body)
 		return fmt.Errorf("controller project create failed: %s", body)
 	}
 
@@ -77,7 +80,9 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	d.SetId(projectID)
-	d.Set("project_id", projectID)
+	if err := d.Set("project_id", projectID); err != nil {
+		return err
+	}
 
 	// Step 2: Create on compute
 	computePayload := Project{Name: projectName, ProjectID: projectID}
@@ -86,14 +91,14 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to marshal compute payload: %w", err)
 	}
 
-	computeResp, err := http.Post(fmt.Sprintf("%s/v2/compute/projects", host), "application/json", bytes.NewBuffer(computeData))
+	computeResp, err := projectHTTPClient.Post(fmt.Sprintf("%s/v2/compute/projects", host), "application/json", bytes.NewBuffer(computeData))
 	if err != nil {
 		return fmt.Errorf("compute POST failed: %w", err)
 	}
 	defer computeResp.Body.Close()
 
 	if computeResp.StatusCode != http.StatusCreated && computeResp.StatusCode != http.StatusOK {
-		body, _ := ioutil.ReadAll(computeResp.Body)
+		body, _ := io.ReadAll(computeResp.Body)
 		return fmt.Errorf("compute project create failed: %s", body)
 	}
 
@@ -104,18 +109,18 @@ func resourceGns3ProjectCreate(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("failed to prepare open project request: %w", err)
 	}
 
-	openResp, err := http.DefaultClient.Do(openReq)
+	openResp, err := projectHTTPClient.Do(openReq)
 	if err != nil {
 		return fmt.Errorf("failed to open/sync project on controller: %w", err)
 	}
 	defer openResp.Body.Close()
 
 	if openResp.StatusCode != http.StatusOK && openResp.StatusCode != http.StatusCreated {
-		body, _ := ioutil.ReadAll(openResp.Body)
+		body, _ := io.ReadAll(openResp.Body)
 		return fmt.Errorf("failed to open/sync project, status: %d, response: %s", openResp.StatusCode, string(body))
 	}
 
-	return nil
+	return resourceGns3ProjectRead(d, meta)
 }
 
 // resourceGns3ProjectRead reads the project state from GNS3.
@@ -129,7 +134,7 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	url := fmt.Sprintf("%s/v2/projects/%s", host, projectID)
-	resp, err := http.Get(url)
+	resp, err := projectHTTPClient.Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to read project from GNS3: %s", err)
 	}
@@ -141,7 +146,8 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to retrieve project, status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to retrieve project, status code: %d, response: %s", resp.StatusCode, body)
 	}
 
 	var project map[string]interface{}
@@ -154,8 +160,12 @@ func resourceGns3ProjectRead(d *schema.ResourceData, meta interface{}) error {
 		return nil
 	}
 
-	d.Set("name", project["name"])
-	d.Set("project_id", project["project_id"])
+	if err := d.Set("name", project["name"]); err != nil {
+		return err
+	}
+	if err := d.Set("project_id", project["project_id"]); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -183,8 +193,7 @@ func resourceGns3ProjectUpdate(d *schema.ResourceData, meta interface{}) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
+		resp, err := projectHTTPClient.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to update project: %s", err)
 		}
@@ -211,15 +220,26 @@ func resourceGns3ProjectDelete(d *schema.ResourceData, meta interface{}) error {
 	if err != nil {
 		return fmt.Errorf("failed to create delete request: %s", err)
 	}
-	client := &http.Client{}
-	_, err = client.Do(req)
+
+	resp, err := projectHTTPClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to delete project: %s", err)
+	}
+	defer resp.Body.Close()
+
+	// Treat "already gone" as success so destroy doesn't fail on drift.
+	// Critically, this now actually checks the status code at all — the
+	// original code ignored resp entirely, so a 409/500/any failure status
+	// was silently treated as a successful delete.
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to delete project, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3ProjectImporter(
 	ctx context.Context,
 	d *schema.ResourceData,
@@ -231,7 +251,6 @@ func resourceGns3ProjectImporter(
 		return nil, fmt.Errorf("project_id must not be empty")
 	}
 
-	// Set it to both state and schema
 	if err := d.Set("project_id", projectID); err != nil {
 		return nil, err
 	}

@@ -4,12 +4,30 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 )
 
+var startAllHTTPClient = &http.Client{Timeout: 15 * time.Second}
+
 // resourceGns3StartAll defines a resource that starts all nodes in a project.
+//
+// This is an action resource, not a state resource — it models a one-time
+// side effect ("start everything in this project") rather than an object
+// GNS3 owns that can be read back and diffed. Two consequences worth knowing:
+//
+//  1. No drift detection: if nodes are later stopped (manually, or via
+//     another resource's start/start_vm flag going false), this resource
+//     will not notice and will not re-trigger. Read is intentionally a no-op
+//     because there's no meaningful "did I start the nodes" state to query —
+//     Update only re-fires if project_id itself changes, which in practice
+//     will rarely if ever happen.
+//  2. Delete does not stop anything: destroying this resource only removes
+//     it from Terraform state. It does not stop or otherwise affect the
+//     nodes it started. `terraform destroy` will not shut down your lab.
 func resourceGns3StartAll() *schema.Resource {
 	return &schema.Resource{
 		Create: resourceGns3StartAllCreate,
@@ -24,8 +42,7 @@ func resourceGns3StartAll() *schema.Resource {
 			"project_id": {
 				Type:        schema.TypeString,
 				Required:    true,
-				Description: "The ID of the GNS3 project whose nodes should be started.",
-				// Removed ForceNew to allow updates (e.g. re-trigger start if project_id changes).
+				Description: "The ID of the GNS3 project whose nodes should be started. Note: this resource has no drift detection and does not stop nodes on destroy — see resource-level documentation.",
 			},
 		},
 	}
@@ -36,42 +53,44 @@ func resourceGns3StartAllCreate(d *schema.ResourceData, meta interface{}) error 
 	host := config.Host
 	projectID := d.Get("project_id").(string)
 
-	// Build the URL for starting all nodes.
 	url := fmt.Sprintf("%s/v2/projects/%s/nodes/start", host, projectID)
 
-	// The API may expect an empty JSON object; adjust as needed.
-	resp, err := http.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
+	resp, err := startAllHTTPClient.Post(url, "application/json", bytes.NewBuffer([]byte("{}")))
 	if err != nil {
 		return fmt.Errorf("failed to start all nodes: %s", err)
 	}
 	defer resp.Body.Close()
 
-	// Accept either 200 OK or 204 No Content as success.
+	// Confirmed against GNS3's documented API: this endpoint returns 204 on
+	// success. 200 accepted too, defensively, in case behavior differs
+	// across server versions.
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("failed to start all nodes, status code: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("failed to start all nodes, status code: %d, response: %s", resp.StatusCode, string(body))
 	}
 
-	// Use a computed ID based on the project ID.
 	d.SetId(projectID + "-start")
 	return nil
 }
 
 func resourceGns3StartAllRead(d *schema.ResourceData, meta interface{}) error {
-	// This is an action resource; optionally implement a check to verify nodes are started.
+	// Intentional no-op — see the doc comment on resourceGns3StartAll for why.
 	return nil
 }
 
 func resourceGns3StartAllUpdate(d *schema.ResourceData, meta interface{}) error {
-	// For updates, we re-trigger the start action.
+	// Only reachable if project_id changes, since it's the only schema field.
+	// Re-trigger the start action against the (new) project.
 	return resourceGns3StartAllCreate(d, meta)
 }
 
 func resourceGns3StartAllDelete(d *schema.ResourceData, meta interface{}) error {
-	// Optionally, implement a "stop" action if supported.
-	// For now, we'll simply remove the resource from state.
+	// Intentionally does not stop nodes — see the doc comment on
+	// resourceGns3StartAll. This only removes the resource from state.
 	d.SetId("")
 	return nil
 }
+
 func resourceGns3StartAllImporter(
 	ctx context.Context,
 	d *schema.ResourceData,
